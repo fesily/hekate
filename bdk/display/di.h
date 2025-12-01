@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (c) 2018-2024 CTCaer
+ * Copyright (c) 2018-2025 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -520,6 +520,7 @@
 
 #define DSI_STATUS 0x15
 #define  DSI_STATUS_RX_FIFO_SIZE 0x1F
+#define  DSI_STATUS_TX_FIFO_SIZE 0x20 // Actual depth is 64.
 
 #define DSI_INIT_SEQ_CONTROL 0x1A
 #define DSI_INIT_SEQ_DATA_0 0x1B
@@ -717,7 +718,7 @@
 #define MIPI_DCS_READ_DDB_CONTINUE     0xA8 // 0x100 size.
 
 /*! MIPI DCS Panel Private CMDs. */
-#define MIPI_DCS_PRIV_SM_SET_COLOR_MODE 0xA0
+#define MIPI_DCS_PRIV_SM_SET_COLOR_MODE 0xA0 // 43 bytes.
 #define MIPI_DCS_PRIV_SM_SET_REG_OFFSET 0xB0
 #define MIPI_DCS_PRIV_SM_SET_ELVSS      0xB1 // OLED backlight tuning. Byte7: PWM transition time in frames.
 #define MIPI_DCS_PRIV_SET_POWER_CONTROL 0xB1
@@ -727,8 +728,9 @@
 #define MIPI_DCS_PRIV_UNK_D6            0xD6
 #define MIPI_DCS_PRIV_UNK_D8            0xD8
 #define MIPI_DCS_PRIV_UNK_D9            0xD9
+#define MIPI_DCS_PRIV_SM_DISPLAY_ID     0xDD
 											 //                          LVL1 LVL2 LVL3 UNK0 UNK1
-#define MIPI_DCS_PRIV_SM_SET_REGS_LOCK  0xE2 // Samsung: Lock (default): 5A5A A5A5 A5A5 A500 A500. Unlock: A5A5 5A5A 5A5A UNK UNK.
+#define MIPI_DCS_PRIV_SM_SET_REGS_LOCK  0xE2 // Samsung: Lock (default): 5A5A A5A5 A5A5 A500 A500. Lock/Unlock: A5/5A. LVL1 group is normal registers.
 #define MIPI_DCS_PRIV_READ_EXTC_CMD_SPI 0xFE // Read EXTC Command In SPI. 1 byte. 0-6: EXT_SPI_CNT, 7:EXT_SP.
 #define MIPI_DCS_PRIV_SET_EXTC_CMD_REG  0xFF // EXTC Command Set enable register. 5 bytes. Pass: FF 98 06 04, PAGE.
 
@@ -765,19 +767,21 @@
 
 #define DCS_CONTROL_DISPLAY_SM_FLASHLIGHT   BIT(2)
 #define DCS_CONTROL_DISPLAY_BACKLIGHT_CTRL  BIT(2)
-#define DCS_CONTROL_DISPLAY_DIMMING_CTRL    BIT(3)
+#define DCS_CONTROL_DISPLAY_DIMMING_CTRL    BIT(3) // Transition fading.
 #define DCS_CONTROL_DISPLAY_BRIGHTNESS_CTRL BIT(5)
+#define DCS_CONTROL_DISPLAY_HBM_CTRL0       BIT(6)
+#define DCS_CONTROL_DISPLAY_HBM_CTRL1       BIT(7)
 
-#define DCS_SM_COLOR_MODE_SATURATED 0x00 // Disabled. Similar to vivid but over-saturated. Wide gamut?
+#define DCS_SM_COLOR_MODE_SATURATED 0x00 // Disabled. Based on Vivid but over-saturated.
 #define DCS_SM_COLOR_MODE_WASHED    0x45
-#define DCS_SM_COLOR_MODE_BASIC     0x03
+#define DCS_SM_COLOR_MODE_BASIC     0x03 // Real natural profile.
 #define DCS_SM_COLOR_MODE_POR_RESET 0x20 // Reset value on power on.
-#define DCS_SM_COLOR_MODE_NATURAL   0x23 // Not actually natural..
-#define DCS_SM_COLOR_MODE_VIVID     0x65
-#define DCS_SM_COLOR_MODE_NIGHT0    0x43 // Based on washed out.
-#define DCS_SM_COLOR_MODE_NIGHT1    0x15 // Based on basic.
-#define DCS_SM_COLOR_MODE_NIGHT2    0x35 // Based on natural.
-#define DCS_SM_COLOR_MODE_NIGHT3    0x75 // Based on vivid.
+#define DCS_SM_COLOR_MODE_NATURAL   0x23 // Not actually natural.. Extra saturation.
+#define DCS_SM_COLOR_MODE_VIVID     0x65 // Saturated.
+#define DCS_SM_COLOR_MODE_NIGHT0    0x43 // Based on Washed Out.
+#define DCS_SM_COLOR_MODE_NIGHT1    0x15 // Based on Basic.
+#define DCS_SM_COLOR_MODE_NIGHT2    0x35 // Based on Natural.
+#define DCS_SM_COLOR_MODE_NIGHT3    0x75 // Based on Vivid.
 
 #define DCS_SM_COLOR_MODE_ENABLE    BIT(0)
 
@@ -838,8 +842,8 @@
 enum
 {
 	PANEL_JDI_XXX062M     = 0x10,
-	PANEL_JDI_LAM062M109A = 0x0910,
-	PANEL_JDI_LPM062M326A = 0x2610,
+	PANEL_JDI_LAM062M109A = 0x0910, // SI.
+	PANEL_JDI_LPM062M326A = 0x2610, // LTPS.
 	PANEL_INL_P062CCA_AZ1 = 0x0F20,
 	PANEL_AUO_A062TAN01   = 0x0F30,
 	PANEL_INL_2J055IA_27A = 0x1020,
@@ -847,12 +851,14 @@ enum
 	PANEL_SHP_LQ055T1SW10 = 0x1040,
 	PANEL_SAM_AMS699VC01  = 0x2050,
 
-	// Found on 6/2" clones. Unknown markings. Quality seems JDI like. Has bad low backlight scaling. ID: [83] 94 [0F].
+	// Found on 6/2" clones. Unknown markings. Clone of AUO A062TAN01.
+	// Quality seems JDI like. Has bad low backlight scaling. ID: [83] 94 [0F]. Sometimes reports [30] 94 [0F]. Both IDs have correct CRC16.
 	PANEL_OEM_CLONE_6_2   = 0x0F83,
 	// Found on 5.5" clones with AUO A055TAN02 (59.05A30.001) fake markings.
 	PANEL_OEM_CLONE_5_5   = 0x00B3,
 	// Found on 5.5" clones with AUO A055TAN02 (59.05A30.001) fake markings.
 	PANEL_OEM_CLONE       = 0x0000
+	//0x0F40 [40] 94 [0F], 5.5" clone
 };
 
 void display_init();

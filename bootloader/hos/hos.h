@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (c) 2018-2024 CTCaer
+ * Copyright (c) 2018-2025 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -27,33 +27,35 @@
 
 //!TODO: Update on mkey changes.
 enum {
-	HOS_KB_VERSION_100  = 0,
-	HOS_KB_VERSION_300  = 1,
-	HOS_KB_VERSION_301  = 2,
-	HOS_KB_VERSION_400  = 3,
-	HOS_KB_VERSION_500  = 4,
-	HOS_KB_VERSION_600  = 5,
-	HOS_KB_VERSION_620  = 6,
-	HOS_KB_VERSION_700  = 7,
-	HOS_KB_VERSION_810  = 8,
-	HOS_KB_VERSION_900  = 9,
-	HOS_KB_VERSION_910  = 10,
-	HOS_KB_VERSION_1210 = 11,
-	HOS_KB_VERSION_1300 = 12,
-	HOS_KB_VERSION_1400 = 13,
-	HOS_KB_VERSION_1500 = 14,
-	HOS_KB_VERSION_1600 = 15,
-	HOS_KB_VERSION_1700 = 16,
-	HOS_KB_VERSION_1800 = 17,
-	HOS_KB_VERSION_1900 = 18,
-	HOS_KB_VERSION_MAX  = HOS_KB_VERSION_1900
+	HOS_MKEY_VER_100  = 0,
+	HOS_MKEY_VER_300  = 1,
+	HOS_MKEY_VER_301  = 2,
+	HOS_MKEY_VER_400  = 3,
+	HOS_MKEY_VER_500  = 4,
+	HOS_MKEY_VER_600  = 5,
+	HOS_MKEY_VER_620  = 6,
+	HOS_MKEY_VER_700  = 7,
+	HOS_MKEY_VER_810  = 8,
+	HOS_MKEY_VER_900  = 9,
+	HOS_MKEY_VER_910  = 10,
+	HOS_MKEY_VER_1210 = 11,
+	HOS_MKEY_VER_1300 = 12,
+	HOS_MKEY_VER_1400 = 13,
+	HOS_MKEY_VER_1500 = 14,
+	HOS_MKEY_VER_1600 = 15,
+	HOS_MKEY_VER_1700 = 16,
+	HOS_MKEY_VER_1800 = 17,
+	HOS_MKEY_VER_1900 = 18,
+	HOS_MKEY_VER_2000 = 19,
+	HOS_MKEY_VER_2100 = 20,
+	HOS_MKEY_VER_MAX  = HOS_MKEY_VER_2100
 };
 
 #define HOS_TSEC_VERSION 4 //! TODO: Update on TSEC Root Key changes.
 
 #define HOS_PKG11_MAGIC  0x31314B50
 #define HOS_EKS_MAGIC    0x31534B45 // EKS1.
-#define HOS_EKS_TSEC_VER (HOS_KB_VERSION_700 + HOS_TSEC_VERSION)
+#define HOS_EKS_TSEC_VER (HOS_MKEY_VER_700 + HOS_TSEC_VERSION)
 
 // Use official Mariko secmon when in stock. Needs access to TZRAM.
 //#define HOS_MARIKO_STOCK_SECMON
@@ -83,7 +85,7 @@ static_assert(sizeof(hos_eks_mbr_t) == 64, "HOS EKS size is wrong!");
 
 typedef struct _launch_ctxt_t
 {
-	void *keyblob;
+	pkg1_eks_t *eks;
 
 	void *pkg1;
 	const pkg1_id_t *pkg1_id;
@@ -104,16 +106,16 @@ typedef struct _launch_ctxt_t
 	u32   kernel_size;
 
 	link_t kip1_list;
-	char*  kip1_patches;
+	char  *kip1_patches;
 
 	bool svcperm;
 	bool debugmode;
 	bool stock;
 	bool emummc_forced;
 
-	void *fss0;
-	u32   fss0_hosver;
-	bool  atmosphere;
+	void *pkg3;
+	u32   pkg3_hosver;
+	bool  patch_krn_proc_id;
 
 	int ucid;
 
@@ -128,8 +130,6 @@ typedef struct _merge_kip_t
 	link_t link;
 } merge_kip_t;
 
-void hos_eks_clear(u32 kb);
-int  hos_launch(ini_sec_t *cfg);
-int  hos_keygen(void *keyblob, u32 kb, tsec_ctxt_t *tsec_ctxt, bool stock, bool is_exo);
+void hos_launch(ini_sec_t *cfg);
 
 #endif

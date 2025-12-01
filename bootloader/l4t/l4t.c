@@ -1,7 +1,7 @@
 /*
  * L4T Loader for Tegra X1
  *
- * Copyright (c) 2020-2024 CTCaer
+ * Copyright (c) 2020-2025 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -172,7 +172,6 @@
 // Misc.
 #define DTB_MAGIC             0xEDFE0DD0 // D00DFEED.
 #define FALCON_DMA_PAGE_SIZE  0x100
-#define ACR_GSC3_ENABLE_MAGIC 0xC0EDBBCC
 #define SOC_ID_T210           0x210
 #define SOC_ID_T210B01        0x214
 #define SKU_NX                0x83
@@ -272,6 +271,8 @@ typedef struct _l4t_ctxt_t
 	int   ram_oc_opt;
 
 	u32   serial_port;
+	u32   sld_type;
+
 	u32   sc7entry_size;
 
 	emc_table_t *mtc_table;
@@ -288,18 +289,22 @@ typedef struct _l4t_ctxt_t
 #define DRAM_VDDQ_OC_MAX_VOLTAGE   650
 #define DRAM_T210B01_TBL_MAX_FREQ 1600000
 
-//! TODO: Update on dram config changes.
+#define NA 0 // Default to 0 for incorrect dram ids.
+
+//!TODO: Update on dram config changes.
 static const u8 mtc_table_idx_t210b01[] = {
 /*	00  01  02  03  04  05  06  07  08  09  10  11  12  13  14  15  16  17  18  19  20  21  22  23  24  25  26  27  28  29  30  31  32  33  34 */
-	-1, -1, -1,  7, -1,  7,  7, -1,  0,  1,  2,  3,  0,  1,  2,  3, -1,  4,  5,  4,  8,  8,  8,  5,  4,  6,  6,  6,  5,  9,  9,  9, 10, 10, 10
+	NA, NA, NA,  7, NA,  7,  7, NA,  0,  1,  2,  3,  0,  1,  2,  3, NA,  4,  5,  4,  8,  8,  8,  5,  4,  6,  6,  6,  5,  9,  9,  9, 10, 10, 10
 };
+
+#undef NA
 
 static const l4t_fw_t l4t_fw[] = {
 	{ TZDRAM_BASE,               "bl31.bin"        },
 	{ BL33_LOAD_BASE,            "bl33.bin"        },
 	{ SC7ENTRY_BASE,             "sc7entry.bin"    },
 	{ SC7EXIT_BASE,              "sc7exit.bin"     },
-	{ SC7EXIT_B01_BASE,          "sc7exit_b01.bin" },
+	{ SC7EXIT_B01_BASE,          "sc7exit_b01.bin" }, //!TODO: Update on fuse burns.
 	{ BPMPFW_BASE,               "bpmpfw.bin"      },
 	{ BPMPFW_B01_BASE,           "bpmpfw_b01.bin"  },
 	{ BPMPFW_B01_MTC_TABLE_BASE, "mtc_tbl_b01.bin" },
@@ -372,6 +377,10 @@ static void _l4t_sdram_lp0_save_params(bool t210b01)
 	// Only save changed carveout registers into PMC for SC7 Exit.
 
 	// VPR.
+#if CARVEOUT_NVDEC_TSEC_ENABLE
+	s32(MC_VIDEO_PROTECT_GPU_OVERRIDE_0, secure_scratch12);
+	s(MC_VIDEO_PROTECT_GPU_OVERRIDE_1, 15:0, secure_scratch49, 15:0);
+#endif
 	s(MC_VIDEO_PROTECT_BOM,     31:20, secure_scratch52, 26:15);
 	s(MC_VIDEO_PROTECT_SIZE_MB, 11:0,  secure_scratch53, 11:0);
 	if (!t210b01) {
@@ -380,7 +389,7 @@ static void _l4t_sdram_lp0_save_params(bool t210b01)
 		s(MC_VIDEO_PROTECT_REG_CTRL, 1:0, secure_scratch14, 31:30);
 	}
 
-	// TZD.
+	// TZDRAM.
 	s(MC_SEC_CARVEOUT_BOM,     31:20, secure_scratch53, 23:12);
 	s(MC_SEC_CARVEOUT_SIZE_MB, 11:0,  secure_scratch54, 11:0);
 	if (!t210b01) {
@@ -483,13 +492,19 @@ static void _l4t_sdram_lp0_save_params(bool t210b01)
 
 static void _l4t_mc_config_carveout(bool t210b01)
 {
+#if CARVEOUT_NVDEC_TSEC_ENABLE
+	// Re-enable access for TSEC clients.
+	MC(MC_VIDEO_PROTECT_GPU_OVERRIDE_0) &= ~BIT(22);
+	MC(MC_VIDEO_PROTECT_GPU_OVERRIDE_1) &= ~(BIT(15) | BIT(14) | BIT(13));
+#endif
+
 	// Disabled VPR carveout. DT decides if enabled or not.
-	MC(MC_VIDEO_PROTECT_BOM) = 0xFFF00000;
-	MC(MC_VIDEO_PROTECT_SIZE_MB) = 0;
+	MC(MC_VIDEO_PROTECT_BOM)      = 0;
+	MC(MC_VIDEO_PROTECT_SIZE_MB)  = 0;
 	MC(MC_VIDEO_PROTECT_REG_CTRL) = VPR_CTRL_TZ_SECURE | VPR_CTRL_LOCKED;
 
 	// Temporarily disable TZDRAM carveout. For launching coldboot TZ.
-	MC(MC_SEC_CARVEOUT_BOM)      = 0xFFF00000;
+	MC(MC_SEC_CARVEOUT_BOM)      = 0;
 	MC(MC_SEC_CARVEOUT_SIZE_MB)  = 0;
 	MC(MC_SEC_CARVEOUT_REG_CTRL) = 0;
 
@@ -522,11 +537,6 @@ static void _l4t_mc_config_carveout(bool t210b01)
 	MC(MC_SECURITY_CARVEOUT1_CLIENT_ACCESS2) = SEC_CARVEOUT_CA2_R_TSEC  | SEC_CARVEOUT_CA2_W_TSEC;
 	MC(MC_SECURITY_CARVEOUT1_CLIENT_ACCESS3) = SEC_CARVEOUT_CA3_R_NVDEC | SEC_CARVEOUT_CA3_W_NVDEC;
 	MC(MC_SECURITY_CARVEOUT1_CLIENT_ACCESS4) = 0;
-	MC(MC_SECURITY_CARVEOUT1_CLIENT_FORCE_INTERNAL_ACCESS0) = 0;
-	MC(MC_SECURITY_CARVEOUT1_CLIENT_FORCE_INTERNAL_ACCESS1) = 0;
-	MC(MC_SECURITY_CARVEOUT1_CLIENT_FORCE_INTERNAL_ACCESS2) = 0;
-	MC(MC_SECURITY_CARVEOUT1_CLIENT_FORCE_INTERNAL_ACCESS3) = 0;
-	MC(MC_SECURITY_CARVEOUT1_CLIENT_FORCE_INTERNAL_ACCESS4) = 0;
 	MC(MC_SECURITY_CARVEOUT1_CFG0) = SEC_CARVEOUT_CFG_LOCKED            |
 									 SEC_CARVEOUT_CFG_UNTRANSLATED_ONLY |
 									 SEC_CARVEOUT_CFG_RD_SEC            |
@@ -558,11 +568,6 @@ static void _l4t_mc_config_carveout(bool t210b01)
 	MC(MC_SECURITY_CARVEOUT1_CLIENT_ACCESS2) = 0;
 	MC(MC_SECURITY_CARVEOUT1_CLIENT_ACCESS3) = 0;
 	MC(MC_SECURITY_CARVEOUT1_CLIENT_ACCESS4) = 0;
-	MC(MC_SECURITY_CARVEOUT1_CLIENT_FORCE_INTERNAL_ACCESS0) = 0;
-	MC(MC_SECURITY_CARVEOUT1_CLIENT_FORCE_INTERNAL_ACCESS1) = 0;
-	MC(MC_SECURITY_CARVEOUT1_CLIENT_FORCE_INTERNAL_ACCESS2) = 0;
-	MC(MC_SECURITY_CARVEOUT1_CLIENT_FORCE_INTERNAL_ACCESS3) = 0;
-	MC(MC_SECURITY_CARVEOUT1_CLIENT_FORCE_INTERNAL_ACCESS4) = 0;
 	MC(MC_SECURITY_CARVEOUT1_CFG0) = SEC_CARVEOUT_CFG_RD_NS  |
 									 SEC_CARVEOUT_CFG_RD_SEC |
 									 SEC_CARVEOUT_CFG_WR_NS  |
@@ -599,11 +604,6 @@ static void _l4t_mc_config_carveout(bool t210b01)
 	MC(MC_SECURITY_CARVEOUT2_CLIENT_ACCESS2) = SEC_CARVEOUT_CA2_R_GPU  | SEC_CARVEOUT_CA2_W_GPU | SEC_CARVEOUT_CA2_R_TSEC;
 	MC(MC_SECURITY_CARVEOUT2_CLIENT_ACCESS3) = 0;
 	MC(MC_SECURITY_CARVEOUT2_CLIENT_ACCESS4) = SEC_CARVEOUT_CA4_R_GPU2 | SEC_CARVEOUT_CA4_W_GPU2;
-	MC(MC_SECURITY_CARVEOUT2_CLIENT_FORCE_INTERNAL_ACCESS0) = 0;
-	MC(MC_SECURITY_CARVEOUT2_CLIENT_FORCE_INTERNAL_ACCESS1) = 0;
-	MC(MC_SECURITY_CARVEOUT2_CLIENT_FORCE_INTERNAL_ACCESS2) = 0;
-	MC(MC_SECURITY_CARVEOUT2_CLIENT_FORCE_INTERNAL_ACCESS3) = 0;
-	MC(MC_SECURITY_CARVEOUT2_CLIENT_FORCE_INTERNAL_ACCESS4) = 0;
 	MC(MC_SECURITY_CARVEOUT2_CFG0) = SEC_CARVEOUT_CFG_LOCKED            |
 									 SEC_CARVEOUT_CFG_UNTRANSLATED_ONLY |
 									 SEC_CARVEOUT_CFG_RD_NS             |
@@ -632,11 +632,6 @@ static void _l4t_mc_config_carveout(bool t210b01)
 	MC(MC_SECURITY_CARVEOUT3_CLIENT_ACCESS2) = 0; // HOS: SEC_CARVEOUT_CA2_R_GPU  | SEC_CARVEOUT_CA2_W_GPU
 	MC(MC_SECURITY_CARVEOUT3_CLIENT_ACCESS3) = 0;
 	MC(MC_SECURITY_CARVEOUT3_CLIENT_ACCESS4) = 0; // HOS: SEC_CARVEOUT_CA4_R_GPU2 | SEC_CARVEOUT_CA4_W_GPU2
-	MC(MC_SECURITY_CARVEOUT3_CLIENT_FORCE_INTERNAL_ACCESS0) = 0;
-	MC(MC_SECURITY_CARVEOUT3_CLIENT_FORCE_INTERNAL_ACCESS1) = 0;
-	MC(MC_SECURITY_CARVEOUT3_CLIENT_FORCE_INTERNAL_ACCESS2) = 0;
-	MC(MC_SECURITY_CARVEOUT3_CLIENT_FORCE_INTERNAL_ACCESS3) = 0;
-	MC(MC_SECURITY_CARVEOUT3_CLIENT_FORCE_INTERNAL_ACCESS4) = 0;
 	MC(MC_SECURITY_CARVEOUT3_CFG0) = SEC_CARVEOUT_CFG_LOCKED            |
 									 SEC_CARVEOUT_CFG_UNTRANSLATED_ONLY |
 									 SEC_CARVEOUT_CFG_RD_NS             |
@@ -661,20 +656,24 @@ static void _l4t_mc_config_carveout(bool t210b01)
 	 */
 	carveout_base -= CARVEOUT_NVDEC_TSEC_ENABLE ? ALIGN(CARVEOUT_TSEC_SIZE, SZ_1M) : 0;
 	MC(MC_SECURITY_CARVEOUT4_BOM)        = CARVEOUT_NVDEC_TSEC_ENABLE ? carveout_base : 0;
+	MC(MC_SECURITY_CARVEOUT4_BOM_HI)     = 0x0;
 	MC(MC_SECURITY_CARVEOUT4_SIZE_128KB) = CARVEOUT_NVDEC_TSEC_ENABLE ? CARVEOUT_TSEC_SIZE / SZ_128K : 0;
+	MC(MC_SECURITY_CARVEOUT4_CLIENT_ACCESS2) = SEC_CARVEOUT_CA2_R_TSEC  | SEC_CARVEOUT_CA2_W_TSEC;
+	MC(MC_SECURITY_CARVEOUT4_CLIENT_ACCESS4) = SEC_CARVEOUT_CA4_R_TSECB | SEC_CARVEOUT_CA4_W_TSECB;
 	MC(MC_SECURITY_CARVEOUT4_CFG0) = SEC_CARVEOUT_CFG_LOCKED         |
 									 SEC_CARVEOUT_CFG_RD_FALCON_HS   |
 									 SEC_CARVEOUT_CFG_WR_FALCON_HS   |
 									 SEC_CARVEOUT_CFG_APERTURE_ID(4) |
 									 SEC_CARVEOUT_CFG_FORCE_APERTURE_ID_MATCH;
-
 	UPRINTF("GSC4: TSEC1 Carveout: %08X - %08X\n",
 		MC(MC_SECURITY_CARVEOUT4_BOM), MC(MC_SECURITY_CARVEOUT4_BOM) + MC(MC_SECURITY_CARVEOUT4_SIZE_128KB) * SZ_128K);
 
 	// Set TSECA carveout. Only for NVDEC bl/prod and TSEC. Otherwise disabled.
 	carveout_base -= CARVEOUT_NVDEC_TSEC_ENABLE ? ALIGN(CARVEOUT_TSEC_SIZE, SZ_1M) : 0;
 	MC(MC_SECURITY_CARVEOUT5_BOM)        = CARVEOUT_NVDEC_TSEC_ENABLE ? carveout_base : 0;
+	MC(MC_SECURITY_CARVEOUT5_BOM_HI)     = 0x0;
 	MC(MC_SECURITY_CARVEOUT5_SIZE_128KB) = CARVEOUT_NVDEC_TSEC_ENABLE ? CARVEOUT_TSEC_SIZE / SZ_128K : 0;
+	MC(MC_SECURITY_CARVEOUT5_CLIENT_ACCESS2) = SEC_CARVEOUT_CA2_R_TSEC | SEC_CARVEOUT_CA2_W_TSEC;
 	MC(MC_SECURITY_CARVEOUT5_CFG0) = SEC_CARVEOUT_CFG_LOCKED         |
 									 SEC_CARVEOUT_CFG_RD_FALCON_HS   |
 									 SEC_CARVEOUT_CFG_WR_FALCON_HS   |
@@ -761,7 +760,8 @@ static void _l4t_bpmpfw_b01_config(l4t_ctxt_t *ctxt)
 	u32 mtc_idx = mtc_table_idx_t210b01[ram_id];
 	for (u32 i = 0; i < 3; i++)
 	{
-		minerva_sdmmc_la_program(BPMPFW_B01_MTC_TABLE_OFFSET(mtc_idx, i), true);
+		if (true)
+			minerva_sdmmc_la_program(BPMPFW_B01_MTC_TABLE_OFFSET(mtc_idx, i), true);
 		memcpy(BPMPFW_B01_DTB_EMC_TBL_OFFSET(i), BPMPFW_B01_MTC_TABLE_OFFSET(mtc_idx, i), BPMPFW_B01_MTC_FREQ_TABLE_SIZE);
 	}
 
@@ -866,6 +866,9 @@ static void _l4t_set_config(l4t_ctxt_t *ctxt, const ini_sec_t *ini_sec, int entr
 	bl33_env[0] = '\0';
 	char val[4] = {0};
 
+	// Set default SLD type.
+	ctxt->sld_type = BL_MAGIC_L4TLDR_SLD;
+
 	// Parse ini section and prepare BL33 env.
 	LIST_FOREACH_ENTRY(ini_kv_t, kv, &ini_sec->kvs, link)
 	{
@@ -896,9 +899,11 @@ static void _l4t_set_config(l4t_ctxt_t *ctxt, const ini_sec_t *ini_sec, int entr
 				ctxt->ram_oc_vddq = 0;
 		}
 		else if (!strcmp("ram_oc_opt",  kv->key))
-			ctxt->ram_oc_opt = atoi(kv->val);
+			ctxt->ram_oc_opt  = atoi(kv->val);
 		else if (!strcmp("uart_port",   kv->key))
 			ctxt->serial_port = atoi(kv->val);
+		else if (!strcmp("sld_type",    kv->key))
+			ctxt->sld_type    = strtol(kv->val, NULL, 16);
 
 		// Set key/val to BL33 env.
 		_l4t_bl33_cfg_set_key(bl33_env, kv->key, kv->val);
@@ -1126,7 +1131,7 @@ void launch_l4t(const ini_sec_t *ini_sec, int entry_idx, int is_list, bool t210b
 			max7762x_regulator_set_voltage(REGULATOR_SD1, ctxt->ram_oc_vdd2 * 1000);
 
 		// Train the rest of the table, apply FSP WAR, set RAM to 800 MHz.
-		minerva_prep_boot_l4t(ctxt->ram_oc_freq, ctxt->ram_oc_opt);
+		minerva_prep_boot_l4t(ctxt->ram_oc_freq, ctxt->ram_oc_opt, true);
 
 		// Set emc table parameters and copy it.
 		int table_entries = minerva_get_mtc_table_entries();
@@ -1165,7 +1170,7 @@ void launch_l4t(const ini_sec_t *ini_sec, int entry_idx, int is_list, bool t210b
 	_l4t_mc_config_carveout(t210b01);
 
 	// Deinit any unneeded HW.
-	hw_deinit(false, BL_MAGIC_L4TLDR_SLD);
+	hw_deinit(false, ctxt->sld_type);
 
 	// Do late hardware config.
 	_l4t_late_hw_config(t210b01);

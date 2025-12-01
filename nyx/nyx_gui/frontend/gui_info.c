@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (c) 2018-2024 CTCaer
+ * Copyright (c) 2018-2025 CTCaer
  * Copyright (c) 2018 balika011
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -24,9 +24,10 @@
 #include "../hos/pkg1.h"
 #include <libs/fatfs/ff.h>
 
+#include <stdlib.h>
+
 #define SECTORS_TO_MIB_COEFF 11
 
-extern hekate_config h_cfg;
 extern volatile boot_cfg_t *b_cfg;
 extern volatile nyx_storage_t *nyx_str;
 
@@ -262,7 +263,7 @@ static lv_res_t _create_mbox_cal0(lv_obj_t *btn)
 	nx_emmc_cal0_t *cal0 = (nx_emmc_cal0_t *)cal0_buf;
 
 	u32 hash[8];
-	se_calc_sha256_oneshot(hash, (u8 *)cal0 + 0x40, cal0->body_size);
+	se_calc_sha256_oneshot(hash, (u8 *)&cal0->cfg_id1, cal0->body_size);
 
 	s_printf(txt_buf,
 		"#FF8000 CAL0 Version:#      %d\n"
@@ -351,9 +352,21 @@ out:
 	return LV_RES_OK;
 }
 
-static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
+static lv_obj_t *hw_info_ver = NULL;
+static lv_res_t _action_win_hw_info_status_close(lv_obj_t *btn)
 {
-	lv_obj_t *win = nyx_create_standard_window(SYMBOL_CHIP" HW & Fuses Info");
+	if (hw_info_ver)
+	{
+		lv_obj_del(hw_info_ver);
+		hw_info_ver = NULL;
+	}
+
+	return nyx_win_close_action_custom(btn);
+}
+
+static lv_res_t _create_window_hw_info_status(lv_obj_t *btn)
+{
+	lv_obj_t *win = nyx_create_window_custom_close_btn(SYMBOL_CHIP" HW & Fuses Info", _action_win_hw_info_status_close);
 	lv_win_add_btn(win, NULL, SYMBOL_DOWNLOAD" Dump fuses", _fuse_dump_window_action);
 	lv_win_add_btn(win, NULL, SYMBOL_INFO" CAL0 Info", _create_mbox_cal0);
 
@@ -364,6 +377,14 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 	lv_label_set_long_mode(lb_desc, LV_LABEL_LONG_BREAK);
 	lv_label_set_recolor(lb_desc, true);
 	lv_label_set_style(lb_desc, &monospace_text);
+
+	char version[32];
+	s_printf(version, "%s%d.%d.%d%c", NYX_VER_RL ? "v" : "", NYX_VER_MJ, NYX_VER_MN, NYX_VER_HF, NYX_VER_RL > 'A' ? NYX_VER_RL : 0);
+	lv_obj_t * lbl_ver = lv_label_create(lv_scr_act(), NULL);
+	lv_label_set_style(lbl_ver, &hint_small_style_white);
+	lv_label_set_text(lbl_ver, version);
+	lv_obj_align(lbl_ver, status_bar.bar_bg, LV_ALIGN_OUT_TOP_RIGHT, -LV_DPI * 9 / 23, -LV_DPI * 2 / 13);
+	hw_info_ver = lbl_ver;
 
 	lv_label_set_static_text(lb_desc,
 		"#FF8000 SoC:#\n"
@@ -405,7 +426,7 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 
 	// Decode fuses.
 	char *sku;
-	char dram_man[64];
+	char dram_model[64];
 	char fuses_hos_version[64];
 	u8 dram_id = fuse_read_dramid(true);
 
@@ -435,22 +456,22 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 		{
 		// LPDDR4 3200Mbps.
 		case LPDDR4_ICOSA_4GB_SAMSUNG_K4F6E304HB_MGCH:
-			strcpy(dram_man, "Samsung K4F6E304HB-MGCH 4GB");
+			strcpy(dram_model, "Samsung K4F6E304HB-MGCH 4GB");
 			break;
 		case LPDDR4_ICOSA_4GB_HYNIX_H9HCNNNBPUMLHR_NLE:
-			strcpy(dram_man, "Hynix H9HCNNNBPUMLHR-NLE 4GB");
+			strcpy(dram_model, "Hynix H9HCNNNBPUMLHR-NLE 4GB");
 			break;
 		case LPDDR4_ICOSA_4GB_MICRON_MT53B512M32D2NP_062_WTC:
-			strcpy(dram_man, "Micron MT53B512M32D2NP-062 WT:C");
+			strcpy(dram_model, "Micron MT53B512M32D2NP-062 WT:C");
 			break;
 		case LPDDR4_ICOSA_6GB_SAMSUNG_K4FHE3D4HM_MGCH:
-			strcpy(dram_man, "Samsung K4FHE3D4HM-MGCH 6GB");
+			strcpy(dram_model, "Samsung K4FHE3D4HM-MGCH 6GB");
 			break;
 		case LPDDR4_ICOSA_8GB_SAMSUNG_K4FBE3D4HM_MGXX:
-			strcpy(dram_man, "Samsung K4FBE3D4HM-MGXX 8GB");
+			strcpy(dram_model, "Samsung K4FBE3D4HM-MGXX 8GB");
 			break;
 		default:
-			strcpy(dram_man, "#FF8000 Unknown#");
+			strcpy(dram_model, "#FF8000 Unknown#");
 			break;
 		}
 	}
@@ -461,60 +482,60 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 		// LPDDR4X 3733Mbps.
 		case LPDDR4X_IOWA_4GB_SAMSUNG_K4U6E3S4AM_MGCJ:
 		case LPDDR4X_HOAG_4GB_SAMSUNG_K4U6E3S4AM_MGCJ:
-			strcpy(dram_man, "Samsung K4U6E3S4AM-MGCJ 4GB");
+			strcpy(dram_model, "Samsung K4U6E3S4AM-MGCJ 4GB");
 			break;
 		case LPDDR4X_IOWA_8GB_SAMSUNG_K4UBE3D4AM_MGCJ:
 		case LPDDR4X_HOAG_8GB_SAMSUNG_K4UBE3D4AM_MGCJ:
-			strcpy(dram_man, "Samsung K4UBE3D4AM-MGCJ 8GB");
+			strcpy(dram_model, "Samsung K4UBE3D4AM-MGCJ 8GB");
 			break;
 		case LPDDR4X_IOWA_4GB_HYNIX_H9HCNNNBKMMLHR_NME:
 		case LPDDR4X_HOAG_4GB_HYNIX_H9HCNNNBKMMLHR_NME:
-			strcpy(dram_man, "Hynix H9HCNNNBKMMLHR-NME 4GB");
+			strcpy(dram_model, "Hynix H9HCNNNBKMMLHR-NME 4GB");
 			break;
 		case LPDDR4X_IOWA_4GB_MICRON_MT53E512M32D2NP_046_WTE: // 4266Mbps.
 		case LPDDR4X_HOAG_4GB_MICRON_MT53E512M32D2NP_046_WTE: // 4266Mbps.
-			strcpy(dram_man, "Micron MT53E512M32D2NP-046 WT:E");
+			strcpy(dram_model, "Micron MT53E512M32D2NP-046 WT:E");
 			break;
 
 		// LPDDR4X 4266Mbps
 		case LPDDR4X_IOWA_4GB_SAMSUNG_K4U6E3S4AA_MGCL:
 		case LPDDR4X_HOAG_4GB_SAMSUNG_K4U6E3S4AA_MGCL:
 		case LPDDR4X_AULA_4GB_SAMSUNG_K4U6E3S4AA_MGCL:
-			strcpy(dram_man, "Samsung K4U6E3S4AA-MGCL 4GB");
+			strcpy(dram_model, "Samsung K4U6E3S4AA-MGCL 4GB");
 			break;
 		case LPDDR4X_IOWA_8GB_SAMSUNG_K4UBE3D4AA_MGCL:
 		case LPDDR4X_HOAG_8GB_SAMSUNG_K4UBE3D4AA_MGCL:
 		case LPDDR4X_AULA_8GB_SAMSUNG_K4UBE3D4AA_MGCL:
-			strcpy(dram_man, "Samsung K4UBE3D4AA-MGCL 8GB");
+			strcpy(dram_model, "Samsung K4UBE3D4AA-MGCL 8GB");
 			break;
 		case LPDDR4X_IOWA_4GB_SAMSUNG_K4U6E3S4AB_MGCL:
 		case LPDDR4X_HOAG_4GB_SAMSUNG_K4U6E3S4AB_MGCL:
 		case LPDDR4X_AULA_4GB_SAMSUNG_K4U6E3S4AB_MGCL:
-			strcpy(dram_man, "Samsung K4U6E3S4AB-MGCL 4GB");
+			strcpy(dram_model, "Samsung K4U6E3S4AB-MGCL 4GB");
 			break;
 		case LPDDR4X_IOWA_4GB_MICRON_MT53E512M32D2NP_046_WTF:
 		case LPDDR4X_HOAG_4GB_MICRON_MT53E512M32D2NP_046_WTF:
 		case LPDDR4X_AULA_4GB_MICRON_MT53E512M32D2NP_046_WTF:
-			strcpy(dram_man, "Micron MT53E512M32D2NP-046 WT:F");
+			strcpy(dram_model, "Micron MT53E512M32D2NP-046 WT:F");
 			break;
 		case LPDDR4X_HOAG_4GB_HYNIX_H9HCNNNBKMMLXR_NEE: // Replaced from Copper.
 		case LPDDR4X_AULA_4GB_HYNIX_H9HCNNNBKMMLXR_NEE: // Replaced from Copper.
 		case LPDDR4X_IOWA_4GB_HYNIX_H9HCNNNBKMMLXR_NEE: // Replaced from Copper.
-			strcpy(dram_man, "Hynix H9HCNNNBKMMLXR-NEE 4GB");
+			strcpy(dram_model, "Hynix H9HCNNNBKMMLXR-NEE 4GB");
 			break;
 		case LPDDR4X_IOWA_4GB_HYNIX_H54G46CYRBX267:
 		case LPDDR4X_HOAG_4GB_HYNIX_H54G46CYRBX267:
 		case LPDDR4X_AULA_4GB_HYNIX_H54G46CYRBX267:
-			strcpy(dram_man, "Hynix H54G46CYRBX267 4GB");
+			strcpy(dram_model, "Hynix H54G46CYRBX267 4GB");
 			break;
 		case LPDDR4X_IOWA_4GB_MICRON_MT53E512M32D1NP_046_WTB:
 		case LPDDR4X_HOAG_4GB_MICRON_MT53E512M32D1NP_046_WTB:
 		case LPDDR4X_AULA_4GB_MICRON_MT53E512M32D1NP_046_WTB:
-			strcpy(dram_man, "Micron MT53E512M32D1NP-046 WT:B");
+			strcpy(dram_model, "Micron MT53E512M32D1NP-046 WT:B");
 			break;
 
 		default:
-			strcpy(dram_man, "#FF8000 Contact me!#");
+			strcpy(dram_model, "#FF8000 Contact me!#");
 			break;
 		}
 	}
@@ -590,7 +611,13 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 		strcpy(fuses_hos_version, "17.0.0 - 18.1.0");
 		break;
 	case 20:
-		strcpy(fuses_hos_version, "19.0.0+");
+		strcpy(fuses_hos_version, "19.0.0 - 19.0.1");
+		break;
+	case 21:
+		strcpy(fuses_hos_version, "20.0.0 - 20.5.0");
+		break;
+	case 22:
+		strcpy(fuses_hos_version, "21.0.0+");
 		break;
 	case 255:
 		strcpy(fuses_hos_version, "#FFD000 Overburnt#");
@@ -611,22 +638,55 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 		lot_code0 <<= 6;
 	}
 
+	char sbk_key[64];
+	char dev_key[32];
+	if (FUSE(FUSE_PRIVATE_KEY0) == 0xFFFFFFFF &&
+		FUSE(FUSE_PRIVATE_KEY1) == 0xFFFFFFFF &&
+		FUSE(FUSE_PRIVATE_KEY2) == 0xFFFFFFFF &&
+		FUSE(FUSE_PRIVATE_KEY3) == 0xFFFFFFFF &&
+		FUSE(FUSE_PRIVATE_KEY4) == 0xFFFFFFFF)
+	{
+		strcpy(sbk_key, "Can't be read (locked out)");
+		strcpy(dev_key, "Can't be read (locked out)");
+	}
+	else
+	{
+		s_printf(sbk_key, "%08X%08X%08X%08X",
+			byte_swap_32(FUSE(FUSE_PRIVATE_KEY0)), byte_swap_32(FUSE(FUSE_PRIVATE_KEY1)),
+			byte_swap_32(FUSE(FUSE_PRIVATE_KEY2)), byte_swap_32(FUSE(FUSE_PRIVATE_KEY3)));
+		s_printf(dev_key, "%08X",  byte_swap_32(FUSE(FUSE_PRIVATE_KEY4)));
+	}
+
 	u32 chip_id = APB_MISC(APB_MISC_GP_HIDREV);
+	char *chip_name = hw_get_chip_id() == GP_HIDREV_MAJOR_T210 ? "T210 (Erista)" : "T210B01 (Mariko)";
+
 	// Parse fuses and display them.
 	s_printf(txt_buf,
 		"%02X - %s - M%d A%02d\n"
-		"%X - %s - %s\n%02d - %s\n%d | %d - HOS: %s\n%08X %08X %08X\n%08X%08X%08X%08X\n%08X\n%08X%08X%08X%08X\n%08X%08X%08X%08X\n%d\n"
-		"%s\n%d.%02d (0x%X)\n%d.%02d (0x%X)\n%d\n%d\n%d\n%d\n0x%X\n%d\n%d (%d)\n%d (%d)\n%d (%d)\n"
-		"%d\n%d\n%d (0x%X)\n%d\n%d\n%d",
-		(chip_id >> 8) & 0xFF,
-		hw_get_chip_id() == GP_HIDREV_MAJOR_T210 ? "T210 (Erista)" : "T210B01 (Mariko)",
-		(chip_id >> 4) & 0xF, (chip_id >> 16) & 0xF,
+		"%X - %s - %s\n"
+		"%02d - %s\n"
+		"%d | %d - HOS: %s\n"
+		"%08X %08X %08X\n"
+		"%s\n%s\n"
+		"%08X%08X%08X%08X\n"
+		"%08X%08X%08X%08X\n"
+		"%d\n"
+		"%s\n"
+		"%d.%02d (0x%X)\n"
+		"%d.%02d (0x%X)\n"
+		"%d\n%d\n%d\n"
+		"%d\n0x%X\n%d\n"
+		"%d (%d)\n"
+		"%d (%d)\n"
+		"%d (%d)\n"
+		"%d\n%d\n%d (0x%X)\n"
+		"%d\n%d\n%d",
+		(chip_id >> 8) & 0xFF, chip_name, (chip_id >> 4) & 0xF, (chip_id >> 16) & 0xF,
 		FUSE(FUSE_SKU_INFO), sku, fuse_read_hw_state() ? "Dev" : "Retail",
-		dram_id, dram_man, burnt_fuses_7, burnt_fuses_6, fuses_hos_version,
+		dram_id, dram_model,
+		burnt_fuses_7, burnt_fuses_6, fuses_hos_version,
 		fuse_read_odm(4), fuse_read_odm(6), fuse_read_odm(7),
-		byte_swap_32(FUSE(FUSE_PRIVATE_KEY0)), byte_swap_32(FUSE(FUSE_PRIVATE_KEY1)),
-		byte_swap_32(FUSE(FUSE_PRIVATE_KEY2)), byte_swap_32(FUSE(FUSE_PRIVATE_KEY3)),
-		byte_swap_32(FUSE(FUSE_PRIVATE_KEY4)),
+		sbk_key, dev_key,
 		byte_swap_32(FUSE(FUSE_PUBLIC_KEY0)), byte_swap_32(FUSE(FUSE_PUBLIC_KEY1)),
 		byte_swap_32(FUSE(FUSE_PUBLIC_KEY2)), byte_swap_32(FUSE(FUSE_PUBLIC_KEY3)),
 		byte_swap_32(FUSE(FUSE_PUBLIC_KEY4)), byte_swap_32(FUSE(FUSE_PUBLIC_KEY5)),
@@ -637,9 +697,9 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 		(FUSE(FUSE_OPT_CP_REV)  >> 5) & 0x3F, FUSE(FUSE_OPT_CP_REV) & 0x1F, FUSE(FUSE_OPT_CP_REV),
 		FUSE(FUSE_CPU_SPEEDO_0_CALIB), FUSE(FUSE_CPU_SPEEDO_1_CALIB), FUSE(FUSE_CPU_SPEEDO_2_CALIB),
 		FUSE(FUSE_SOC_SPEEDO_0_CALIB), FUSE(FUSE_SOC_SPEEDO_1_CALIB), FUSE(FUSE_SOC_SPEEDO_2_CALIB),
-		FUSE(FUSE_CPU_IDDQ_CALIB), FUSE(FUSE_CPU_IDDQ_CALIB) * 4,
-		FUSE(FUSE_SOC_IDDQ_CALIB), FUSE(FUSE_SOC_IDDQ_CALIB) * 4,
-		FUSE(FUSE_GPU_IDDQ_CALIB), FUSE(FUSE_GPU_IDDQ_CALIB) * 5,
+		FUSE(FUSE_CPU_IDDQ_CALIB) * 4, FUSE(FUSE_CPU_IDDQ_CALIB),
+		FUSE(FUSE_SOC_IDDQ_CALIB) * 4, FUSE(FUSE_SOC_IDDQ_CALIB),
+		FUSE(FUSE_GPU_IDDQ_CALIB) * 5, FUSE(FUSE_GPU_IDDQ_CALIB),
 		FUSE(FUSE_OPT_VENDOR_CODE), FUSE(FUSE_OPT_FAB_CODE), lot_bin, FUSE(FUSE_OPT_LOT_CODE_0),
 		FUSE(FUSE_OPT_WAFER_ID), FUSE(FUSE_OPT_X_COORDINATE), FUSE(FUSE_OPT_Y_COORDINATE));
 
@@ -663,7 +723,7 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 	u32 ranks    = EMC(EMC_ADR_CFG) + 1;
 	u32 channels = (EMC(EMC_FBIO_CFG7) >> 1) & 3;
 	channels = (channels & 1) + ((channels & 2) >> 1);
-	s_printf(txt_buf, "#00DDFF %s SDRAM ##FF8000 (Ch 0 | Ch 1):#\n#FF8000 Vendor:# ", h_cfg.t210b01 ? "LPDDR4X" : "LPDDR4");
+	s_printf(txt_buf, "#00DDFF %s SDRAM ##FF8000 (Module 0 | 1):#\n#FF8000 Vendor:# ", h_cfg.t210b01 ? "LPDDR4X" : "LPDDR4");
 	switch (ram_vendor.chip0.rank0_ch0)
 	{
 	case 1:
@@ -735,49 +795,76 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 		s_printf(txt_buf + strlen(txt_buf), "#FF8000 Unknown# (%d)", ram_vendor.chip1.rank0_ch0);
 		break;
 	}
-	s_printf(txt_buf + strlen(txt_buf), "\n#FF8000 Rev ID:#  %X.%02X #FF8000 |# %X.%02X\n#FF8000 Density:# %d",
-		ram_rev0.chip0.rank0_ch0, ram_rev1.chip0.rank0_ch0, ram_rev0.chip1.rank0_ch0, ram_rev1.chip1.rank0_ch0, ranks * channels);
+
+	s_printf(txt_buf + strlen(txt_buf), "\n#FF8000 Rev ID:#  %X.%02X #FF8000 |# %X.%02X\n#FF8000 Density:# ",
+		ram_rev0.chip0.rank0_ch0, ram_rev1.chip0.rank0_ch0, ram_rev0.chip1.rank0_ch0, ram_rev1.chip1.rank0_ch0);
+
+	u32 actual_ranks = (ram_vendor.chip0.rank0_ch0 == ram_vendor.chip0.rank1_ch0 &&
+						ram_vendor.chip0.rank0_ch1 == ram_vendor.chip0.rank1_ch1 &&
+						ram_rev0.chip0.rank0_ch0 == ram_rev0.chip0.rank1_ch0 &&
+						ram_rev0.chip0.rank0_ch1 == ram_rev0.chip0.rank1_ch1 &&
+						ram_rev1.chip0.rank0_ch0 == ram_rev1.chip0.rank1_ch0 &&
+						ram_rev1.chip0.rank0_ch1 == ram_rev1.chip0.rank1_ch1 &&
+						ram_density.chip0.rank0_ch0 == ram_density.chip0.rank1_ch0 &&
+						ram_density.chip0.rank0_ch1 == ram_density.chip0.rank1_ch1)
+					   ? 2 : 1;
+	bool rank_bad = ranks != actual_ranks;
+	s_printf(txt_buf + strlen(txt_buf), "%s %d x %s", rank_bad ? "#FFDD00" : "", actual_ranks * channels, rank_bad ? "#" : "");
+
 	switch ((ram_density.chip0.rank0_ch0 & 0x3C) >> 2)
 	{
 	case 2:
-		strcat(txt_buf, " x 512MB");
+		strcat(txt_buf, "512MB");
 		break;
 	case 3:
-		strcat(txt_buf, " x 768MB");
+		strcat(txt_buf, "768MB");
 		break;
 	case 4:
-		strcat(txt_buf, " x 1GB");
+		strcat(txt_buf, "1GB");
 		break;
 	case 5:
-		strcat(txt_buf, " x 1.5GB");
+		strcat(txt_buf, "1.5GB");
 		break;
 	case 6:
-		strcat(txt_buf, " x 2GB");
+		strcat(txt_buf, "2GB");
 		break;
 	default:
-		s_printf(txt_buf + strlen(txt_buf), " x Unk (%d)", (ram_density.chip0.rank0_ch0 & 0x3C) >> 2);
+		s_printf(txt_buf + strlen(txt_buf), "Unk (%d)", (ram_density.chip0.rank0_ch0 & 0x3C) >> 2);
 		break;
 	}
-	s_printf(txt_buf + strlen(txt_buf), " #FF8000 |# %d", ranks * channels);
+
+	actual_ranks = (ram_vendor.chip1.rank0_ch0 == ram_vendor.chip1.rank1_ch0 &&
+					ram_vendor.chip1.rank0_ch1 == ram_vendor.chip1.rank1_ch1 &&
+					ram_rev0.chip1.rank0_ch0 == ram_rev0.chip1.rank1_ch0 &&
+					ram_rev0.chip1.rank0_ch1 == ram_rev0.chip1.rank1_ch1 &&
+					ram_rev1.chip1.rank0_ch0 == ram_rev1.chip1.rank1_ch0 &&
+					ram_rev1.chip1.rank0_ch1 == ram_rev1.chip1.rank1_ch1 &&
+					ram_density.chip1.rank0_ch0 == ram_density.chip1.rank1_ch0 &&
+					ram_density.chip1.rank0_ch1 == ram_density.chip1.rank1_ch1)
+				   ? 2 : 1;
+	rank_bad = ranks != actual_ranks;
+
+	s_printf(txt_buf + strlen(txt_buf), " #FF8000 |# %s %d x %s", rank_bad ? "#FFDD00" : "", actual_ranks * channels, rank_bad ? "#" : "");
+
 	switch ((ram_density.chip1.rank0_ch0 & 0x3C) >> 2)
 	{
 	case 2:
-		strcat(txt_buf, " x 512MB");
+		strcat(txt_buf, "512MB");
 		break;
 	case 3:
-		strcat(txt_buf, " x 768MB");
+		strcat(txt_buf, "768MB");
 		break;
 	case 4:
-		strcat(txt_buf, " x 1GB");
+		strcat(txt_buf, "1GB");
 		break;
 	case 5:
-		strcat(txt_buf, " x 1.5GB");
+		strcat(txt_buf, "1.5GB");
 		break;
 	case 6:
-		strcat(txt_buf, " x 2GB");
+		strcat(txt_buf, "2GB");
 		break;
 	default:
-		s_printf(txt_buf + strlen(txt_buf), " x Unk (%d)", (ram_density.chip1.rank0_ch0 & 0x3C) >> 2);
+		s_printf(txt_buf + strlen(txt_buf), "Unk (%d)", (ram_density.chip1.rank0_ch0 & 0x3C) >> 2);
 		break;
 	}
 	strcat(txt_buf, "\n\n");
@@ -940,13 +1027,13 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 			if (touch_panel)
 				panel_ic_paired = touch_panel->idx == 0; // NISSHA NFT-K12D.
 			break;
-		case 0x98000004: // New 6.2" panel?
-		case 0x50000001:
-		case 0x50000002:
-			strcat(txt_buf, "FST2 UNK");
-			if (touch_panel)
-				panel_ic_paired = touch_panel->idx == 0;
-			break;
+		// case 0x98000004: // New 6.2" panel?
+		// case 0x50000001:
+		// case 0x50000002:
+		// 	strcat(txt_buf, "FST2 UNK");
+		// 	if (touch_panel)
+		// 		panel_ic_paired = touch_panel->idx == 0;
+		// 	break;
 		case 0x001A0300:
 		case 0x32000102:
 			strcat(txt_buf, "4CD60D/2");
@@ -974,7 +1061,7 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 				panel_ic_paired = touch_panel->idx == 4; // Samsung BH2109.
 			break;
 		default:
-			strcat(txt_buf, "#FF8000 Unknown#");
+			strcat(txt_buf, "#FF8000 Contact me#");
 			break;
 		}
 
@@ -998,9 +1085,6 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 
 	lv_obj_set_width(lb_desc2, lv_obj_get_width(desc2));
 	lv_obj_align(desc2, val, LV_ALIGN_OUT_RIGHT_MID, LV_DPI / 4, 0);
-
-	if (!btn)
-		_create_mbox_cal0(NULL);
 
 	return LV_RES_OK;
 }
@@ -1288,6 +1372,8 @@ out:
 	return LV_RES_OK;
 }
 
+static lv_obj_t *bench_sd_err_label = NULL;
+
 static lv_res_t _create_mbox_benchmark(bool sd_bench)
 {
 	sdmmc_storage_t *storage;
@@ -1299,12 +1385,11 @@ static lv_res_t _create_mbox_benchmark(bool sd_bench)
 	static const char * mbox_btn_map[] = { "\251", "\222OK", "\251", "" };
 	lv_obj_t * mbox = lv_mbox_create(dark_bg, NULL);
 	lv_mbox_set_recolor_text(mbox, true);
-	lv_obj_set_width(mbox, LV_HOR_RES / 7 * 4);
+	lv_obj_set_width(mbox, LV_HOR_RES * 3 / 7);
 
 	char *txt_buf = (char *)malloc(SZ_16K);
 
-	s_printf(txt_buf, "#FF8000 %s Benchmark#\n[Raw Reads] Abort: VOL- & VOL+",
-		sd_bench ? "SD Card" : "eMMC");
+	s_printf(txt_buf, "#FF8000 %s Benchmark#\n[Raw Reads] Abort: VOL- & VOL+", sd_bench ? "SD Card" : "eMMC");
 
 	lv_mbox_set_text(mbox, txt_buf);
 	txt_buf[0] = 0;
@@ -1353,11 +1438,41 @@ static lv_res_t _create_mbox_benchmark(bool sd_bench)
 		goto out;
 	}
 
+	// Set benchmark parameters.
+	const u32 sct_blk_seq = 0x8000;   // 16MB.  A2 spec denotes 4MB, but using older big AU.
+	const u32 sct_blk_4kb = 8;        // 4KB.
+	const u32 sct_rem_seq = 0x200000; // 1GB.   A2 spec.
+	const u32 sct_rem_4kb = 0x80000;  // 256MB. A2 spec.
+	const u32 sct_num_1mb = 0x800;    // 1MB.
+	const u32 size_bytes_seq = sct_rem_seq * SDMMC_DAT_BLOCKSIZE;
+	const u32 size_bytes_4kb = sct_rem_4kb * SDMMC_DAT_BLOCKSIZE;
+
+	// Set calculation divider. 1000 or 1024. (Does not affect IOPS).
+	u32 mb_div = 1000; // Unfortunately most software uses fake MB.
+
+	char *mbs_text;
+	switch (mb_div)
+	{
+	case 1000:
+		mbs_text = "MB/s";
+		break;
+	case 1024:
+		mbs_text = "MiB/s";
+		break;
+	}
+
+	// Set actual div in MB/MiB.
+	mb_div *= mb_div;
+
 	int error = 0;
 	u32 iters = 3;
-	u32 offset_chunk_start = ALIGN_DOWN(storage->sec_cnt / 3, 0x8000); // Align to 16MB.
+	u32 offset_chunk_start = ALIGN_DOWN(storage->sec_cnt / 3, sct_blk_seq); // Align to block.
 	if (storage->sec_cnt < 0xC00000)
 		iters -= 2; // 4GB card.
+
+	u32  rnd_off_cnt    = sct_rem_4kb / sct_blk_4kb;
+	u32 *random_offsets = malloc(rnd_off_cnt * sizeof(u32));
+	u32 *times_taken_4k = malloc(rnd_off_cnt * sizeof(u32));
 
 	for (u32 iter_curr = 0; iter_curr < iters; iter_curr++)
 	{
@@ -1365,18 +1480,18 @@ static lv_res_t _create_mbox_benchmark(bool sd_bench)
 		u32 prevPct = 200;
 		u32 timer = 0;
 		u32 lba_curr = 0;
-		u32 sector = offset_chunk_start * iter_curr;
-		u32 sector_num = 0x8000;       // 16MB chunks.
-		u32 data_remaining = 0x200000; // 1GB.
+		u32 sector_off = offset_chunk_start * iter_curr;
+		u32 sector_num = sct_blk_seq;
+		u32 data_remaining = sct_rem_seq;
 
-		s_printf(txt_buf + strlen(txt_buf), "#C7EA46 %d/3# - Sector Offset #C7EA46 %08X#:\n", iter_curr + 1, sector);
+		s_printf(txt_buf + strlen(txt_buf), "#C7EA46 %d/3# - Sector Offset #C7EA46 %08X#:\n", iter_curr + 1, sector_off);
 
 		u32 render_min_ms = 66;
 		u32 render_timer  = get_tmr_ms() + render_min_ms;
 		while (data_remaining)
 		{
 			u32 time_taken = get_tmr_us();
-			error = !sdmmc_storage_read(storage, sector + lba_curr, sector_num, (u8 *)MIXD_BUF_ALIGNED);
+			error = !sdmmc_storage_read(storage, sector_off + lba_curr, sector_num, (u8 *)MIXD_BUF_ALIGNED);
 			time_taken = get_tmr_us() - time_taken;
 			timer += time_taken;
 
@@ -1384,7 +1499,7 @@ static lv_res_t _create_mbox_benchmark(bool sd_bench)
 			data_remaining -= sector_num;
 			lba_curr += sector_num;
 
-			pct = (lba_curr * 100) / 0x200000;
+			pct = (lba_curr * 100) / sct_rem_seq;
 			if (pct != prevPct && render_timer < get_tmr_ms())
 			{
 				lv_bar_set_value(bar, pct);
@@ -1402,10 +1517,10 @@ static lv_res_t _create_mbox_benchmark(bool sd_bench)
 		}
 		lv_bar_set_value(bar, 100);
 
-		u32 rate_1k = ((u64)1024 * 1000 * 1000 * 1000) / timer;
-		s_printf(txt_buf + strlen(txt_buf),
-			" Sequential 16MiB - Rate: #C7EA46 %3d.%02d MiB/s#\n",
-			rate_1k / 1000, (rate_1k % 1000) / 10);
+		// Calculate rate for transfer.
+		u32 rate_1k = (u64)size_bytes_seq * 1000 * 1000 * 1000 / mb_div / timer;
+		s_printf(txt_buf + strlen(txt_buf), " SEQ 16MB - Rate: #C7EA46 %3d.%02d %s#",
+			rate_1k / 1000, (rate_1k % 1000) / 10, mbs_text);
 		lv_label_set_text(lbl_status, txt_buf);
 		lv_obj_align(lbl_status, NULL, LV_ALIGN_CENTER, 0, 0);
 		lv_obj_align(mbox, NULL, LV_ALIGN_CENTER, 0, 0);
@@ -1415,22 +1530,25 @@ static lv_res_t _create_mbox_benchmark(bool sd_bench)
 		prevPct = 200;
 		timer = 0;
 		lba_curr = 0;
-		sector_num = 8;            // 4KB chunks.
-		data_remaining = 0x100000; // 512MB.
+		sector_num = sct_blk_4kb;
+		data_remaining = sct_rem_4kb;
 
+		u32 loop_idx = 0;
 		render_timer = get_tmr_ms() + render_min_ms;
 		while (data_remaining)
 		{
 			u32 time_taken = get_tmr_us();
-			error = !sdmmc_storage_read(storage, sector + lba_curr, sector_num, (u8 *)MIXD_BUF_ALIGNED);
+			error = !sdmmc_storage_read(storage, sector_off + lba_curr, sector_num, (u8 *)MIXD_BUF_ALIGNED);
 			time_taken = get_tmr_us() - time_taken;
+
 			timer += time_taken;
+			times_taken_4k[loop_idx++] = time_taken;
 
 			manual_system_maintenance(false);
 			data_remaining -= sector_num;
 			lba_curr += sector_num;
 
-			pct = (lba_curr * 100) / 0x100000;
+			pct = (lba_curr * 100) / sct_rem_4kb;
 			if (pct != prevPct && render_timer < get_tmr_ms())
 			{
 				lv_bar_set_value(bar, pct);
@@ -1448,49 +1566,64 @@ static lv_res_t _create_mbox_benchmark(bool sd_bench)
 		}
 		lv_bar_set_value(bar, 100);
 
-		rate_1k = ((u64)512 * 1000 * 1000 * 1000) / timer;
-		u32 iops_1k = ((u64)512 * 1024 * 1000 * 1000 * 1000) / (4096 / 1024) / timer / 1000;
-		s_printf(txt_buf + strlen(txt_buf),
-			" Sequential  4KiB - Rate: #C7EA46 %3d.%02d MiB/s#, IOPS: #C7EA46 %4d#\n",
-			rate_1k / 1000, (rate_1k % 1000) / 10, iops_1k);
+		qsort(times_taken_4k, loop_idx, sizeof(u32), qsort_compare_int); // Use int for faster compare. Value can't exceed 2s.
+
+		u32 pct95 = 0;
+		for (u32 i = 0; i < loop_idx * 95 / 100; i++)
+			pct95 += times_taken_4k[i];
+		pct95 /= loop_idx * 95 / 100;
+
+		u32 pct05 = 0;
+		for (u32 i = 0; i < loop_idx * 5 / 100; i++)
+			pct05 += times_taken_4k[loop_idx - 1 - i];
+		pct05 /= loop_idx * 5 / 100;
+
+		// Calculate rate and IOPS for transfer.
+		rate_1k = (u64)size_bytes_4kb * 1000 * 1000 * 1000 / mb_div / timer;
+		u32 iops = ((u64)(sct_rem_4kb / sct_num_1mb) * 1024 * 1000 * 1000 * 1000) / (4096 / 1024) / timer / 1000;
+		s_printf(txt_buf + strlen(txt_buf), "        AVG #C7EA46 95th#  #FF3C28 5th#\n");
+		s_printf(txt_buf + strlen(txt_buf), " SEQ  4KB - Rate: #C7EA46 %3d.%02d %s# IOPS: #C7EA46 %4d# %4d %4d \n",
+			rate_1k / 1000, (rate_1k % 1000) / 10, mbs_text, iops, 1000000 / pct95, 1000000 / pct05);
 		lv_label_set_text(lbl_status, txt_buf);
 		lv_obj_align(lbl_status, NULL, LV_ALIGN_CENTER, 0, 0);
 		lv_obj_align(mbox, NULL, LV_ALIGN_CENTER, 0, 0);
 		manual_system_maintenance(true);
 
 		u32 lba_idx = 0;
-		u32 *random_offsets = malloc(0x20000 * sizeof(u32));
-		u32  random_numbers[4];
-		for (u32 i = 0; i < 0x20000; i += 4)
+		u32 random_numbers[4];
+		for (u32 i = 0; i < rnd_off_cnt; i += 4)
 		{
 			// Generate new random numbers.
 			while (!se_gen_prng128(random_numbers))
 				;
-			// Clamp offsets to 512MB range.
-			random_offsets[i + 0] = random_numbers[0] % 0x100000;
-			random_offsets[i + 1] = random_numbers[1] % 0x100000;
-			random_offsets[i + 2] = random_numbers[2] % 0x100000;
-			random_offsets[i + 3] = random_numbers[3] % 0x100000;
+			// Clamp offsets to 256MB range.
+			random_offsets[i + 0] = random_numbers[0] % sct_rem_4kb;
+			random_offsets[i + 1] = random_numbers[1] % sct_rem_4kb;
+			random_offsets[i + 2] = random_numbers[2] % sct_rem_4kb;
+			random_offsets[i + 3] = random_numbers[3] % sct_rem_4kb;
 		}
 
 		pct = 0;
 		prevPct = 200;
 		timer = 0;
-		data_remaining = 0x100000; // 512MB.
+		data_remaining = sct_rem_4kb;
 
+		loop_idx = 0;
 		render_timer = get_tmr_ms() + render_min_ms;
 		while (data_remaining)
 		{
 			u32 time_taken = get_tmr_us();
-			error = !sdmmc_storage_read(storage, sector + random_offsets[lba_idx], sector_num, (u8 *)MIXD_BUF_ALIGNED);
+			error = !sdmmc_storage_read(storage, sector_off + random_offsets[lba_idx], sector_num, (u8 *)MIXD_BUF_ALIGNED);
 			time_taken = get_tmr_us() - time_taken;
+
 			timer += time_taken;
+			times_taken_4k[loop_idx++] = time_taken;
 
 			manual_system_maintenance(false);
 			data_remaining -= sector_num;
 			lba_idx++;
 
-			pct = (lba_idx * 100) / 0x20000;
+			pct = (lba_idx * 100) / rnd_off_cnt;
 			if (pct != prevPct && render_timer < get_tmr_ms())
 			{
 				lv_bar_set_value(bar, pct);
@@ -1504,29 +1637,39 @@ static lv_res_t _create_mbox_benchmark(bool sd_bench)
 			}
 
 			if (error)
-			{
-				free(random_offsets);
 				goto error;
-			}
 		}
 		lv_bar_set_value(bar, 100);
 
-		// Calculate rate and IOPS for 512MB transfer.
-		rate_1k = ((u64)512 * 1000 * 1000 * 1000) / timer;
-		iops_1k = ((u64)512 * 1024 * 1000 * 1000 * 1000) / (4096 / 1024) / timer / 1000;
-		s_printf(txt_buf + strlen(txt_buf),
-			" Random      4KiB - Rate: #C7EA46 %3d.%02d MiB/s#, IOPS: #C7EA46 %4d#\n",
-			rate_1k / 1000, (rate_1k % 1000) / 10, iops_1k);
+		qsort(times_taken_4k, loop_idx, sizeof(u32), qsort_compare_int); // Use int for faster compare. Value can't exceed 2s.
+
+		pct95 = 0;
+		for (u32 i = 0; i < loop_idx * 95 / 100; i++)
+			pct95 += times_taken_4k[i];
+		pct95 /= loop_idx * 95 / 100;
+
+		pct05 = 0;
+		for (u32 i = 0; i < loop_idx * 5 / 100; i++)
+			pct05 += times_taken_4k[loop_idx - 1 - i];
+		pct05 /= loop_idx * 5 / 100;
+
+		// Calculate rate and IOPS for transfer.
+		rate_1k = (u64)size_bytes_4kb * 1000 * 1000 * 1000 / mb_div / timer;
+		iops = ((u64)(sct_rem_4kb / sct_num_1mb) * 1024 * 1000 * 1000 * 1000) / (4096 / 1024) / timer / 1000;
+		s_printf(txt_buf + strlen(txt_buf), " RND  4KB - Rate: #C7EA46 %3d.%02d %s# IOPS: #C7EA46 %4d# %4d %4d \n",
+			rate_1k / 1000, (rate_1k % 1000) / 10, mbs_text, iops, 1000000 / pct95, 1000000 / pct05);
 		if (iter_curr == iters - 1)
-			txt_buf[strlen(txt_buf) - 1] = 0; // Cut off last line change.
+			txt_buf[strlen(txt_buf) - 1] = 0; // Cut off last new line.
 		lv_label_set_text(lbl_status, txt_buf);
 		lv_obj_align(lbl_status, NULL, LV_ALIGN_CENTER, 0, 0);
 		lv_obj_align(mbox, NULL, LV_ALIGN_CENTER, 0, 0);
 		manual_system_maintenance(true);
-		free(random_offsets);
 	}
 
 error:
+	free(random_offsets);
+	free(times_taken_4k);
+
 	if (error)
 	{
 		if (error == -1)
@@ -1553,6 +1696,20 @@ error:
 		emmc_end();
 
 out:
+	s_printf(txt_buf, "#FF8000 %s Benchmark#\n[Raw Reads]", sd_bench ? "SD Card" : "eMMC");
+	lv_mbox_set_text(mbox, txt_buf);
+
+	// Update SDMMC error info in case it changed.
+	if (sd_bench && bench_sd_err_label)
+	{
+		u16 *sd_errors = sd_get_error_count();
+		s_printf(txt_buf, "\n%d (%d)\n%d (%d)\n%d (%d)",
+			sd_errors[SD_ERROR_INIT_FAIL], nyx_str->info.sd_errors[SD_ERROR_INIT_FAIL],
+			sd_errors[SD_ERROR_RW_FAIL],   nyx_str->info.sd_errors[SD_ERROR_RW_FAIL],
+			sd_errors[SD_ERROR_RW_RETRY],  nyx_str->info.sd_errors[SD_ERROR_RW_RETRY]);
+		lv_label_set_text(bench_sd_err_label, txt_buf);
+	}
+
 	free(txt_buf);
 
 	lv_mbox_add_btns(mbox, mbox_btn_map, mbox_action); // Important. After set_text.
@@ -1760,13 +1917,13 @@ static lv_res_t _create_window_emmc_info_status(lv_obj_t *btn)
 
 	u32 idx = 0;
 	int lines_left = 20;
-	s_printf(txt_buf + strlen(txt_buf), "#FFBA00 Idx Name                      Size        Offset     Sectors#\n");
+	s_printf(txt_buf + strlen(txt_buf), "#FFBA00 Idx Name                            Size     Offset    Sectors#\n");
 	LIST_FOREACH_ENTRY(emmc_part_t, part, &gpt, link)
 	{
 		int lines = strlen(part->name) > 25 ? 2 : 1;
 		if ((lines_left - lines) <= 0)
 		{
-			strcat(txt_buf, "#FFDD00 Table does not fit on screen!#");
+			strcat(txt_buf, "#FFDD00 Table does not fit on screen...#");
 			break;
 		}
 
@@ -1811,8 +1968,8 @@ out_error:
 		lv_mbox_set_recolor_text(mbox, true);
 
 		s_printf(txt_buf,
-			"#FF8000 eMMC Issues Check#\n\n"
-			"#FFDD00 Your eMMC is initialized in slower mode,#\n"
+			"#FF8000 eMMC Issues Warning#\n\n"
+			"#FFDD00 Your eMMC is initialized in a slower mode,#\n"
 			"#FFDD00 or init/read/write errors occurred!#\n"
 			"#FFDD00 This might mean hardware issues!#\n\n"
 			"#00DDFF Bus Speed:# %d MB/s\n\n"
@@ -1844,7 +2001,7 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 	lv_win_add_btn(win, NULL, SYMBOL_SD" Benchmark", _create_mbox_sd_bench);
 
 	lv_obj_t *desc = lv_cont_create(win, NULL);
-	lv_obj_set_size(desc, LV_HOR_RES / 2 / 5 * 2, LV_VER_RES - (LV_DPI * 11 / 8) * 5 / 2);
+	lv_obj_set_size(desc, LV_HOR_RES / 2 / 6 * 2, LV_VER_RES - (LV_DPI * 11 / 8) * 5 / 2);
 
 	lv_obj_t * lb_desc = lv_label_create(desc, NULL);
 	lv_label_set_long_mode(lb_desc, LV_LABEL_LONG_BREAK);
@@ -1865,7 +2022,7 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 	}
 
 	lv_label_set_text(lb_desc,
-		"#00DDFF Card IDentification:#\n"
+		"#00DDFF Card ID:#\n"
 		"Vendor ID:\n"
 		"Model:\n"
 		"OEM ID:\n"
@@ -1874,11 +2031,11 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 		"S/N:\n"
 		"Month/Year:\n\n"
 		"Max Power:\n"
-		"Bootloader bus:"
+		"Initial bus:"
 	);
 
 	lv_obj_t *val = lv_cont_create(win, NULL);
-	lv_obj_set_size(val, LV_HOR_RES / 9 * 2, LV_VER_RES - (LV_DPI * 11 / 8) * 5 / 2);
+	lv_obj_set_size(val, LV_HOR_RES / 12 * 3, LV_VER_RES - (LV_DPI * 11 / 8) * 5 / 2);
 
 	lv_obj_t * lb_val = lv_label_create(val, lb_desc);
 
@@ -1890,7 +2047,7 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 	switch (sd_storage.cid.manfid)
 	{
 	case 0x00:
-		strcat(txt_buf, "Fake ");
+		strcat(txt_buf, "#FFDD00 Fake# ");
 		break;
 	case 0x01:
 		strcat(txt_buf, "Panasonic ");
@@ -1985,7 +2142,7 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 	}
 
 	// UHS-I max power limit is 400mA, no matter what the card says.
-	u32 card_power_limit_nominal = sd_storage.card_power_limit > 400 ? 400 : sd_storage.card_power_limit;
+	u32 max_power_nominal = sd_storage.max_power > 400 ? 400 : sd_storage.max_power;
 
 	s_printf(txt_buf + strlen(txt_buf), "(%02X)\n%c%c%c%c%c\n%c%c (%04X)\n%X\n%X\n%08x\n%02d/%04d\n\n%d mW (%d mA)\n",
 		sd_storage.cid.manfid,
@@ -1994,7 +2151,7 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 		(sd_storage.cid.oemid >> 8) & 0xFF, sd_storage.cid.oemid & 0xFF, sd_storage.cid.oemid,
 		sd_storage.cid.hwrev, sd_storage.cid.fwrev, sd_storage.cid.serial,
 		sd_storage.cid.month, sd_storage.cid.year,
-		card_power_limit_nominal * 3600 / 1000, sd_storage.card_power_limit);
+		max_power_nominal * 3600 / 1000, sd_storage.max_power);
 
 	switch (nyx_str->info.sd_init)
 	{
@@ -2020,7 +2177,7 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 	lv_obj_align(val, desc, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
 
 	lv_obj_t *desc2 = lv_cont_create(win, NULL);
-	lv_obj_set_size(desc2, LV_HOR_RES / 2 / 4 * 2, LV_VER_RES - (LV_DPI * 11 / 8) * 5 / 2);
+	lv_obj_set_size(desc2, LV_HOR_RES / 2 / 11 * 5, LV_VER_RES - (LV_DPI * 11 / 8) * 5 / 2);
 
 	lv_obj_t * lb_desc2 = lv_label_create(desc2, lb_desc);
 
@@ -2037,10 +2194,10 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 		"Write Protect:"
 	);
 	lv_obj_set_width(lb_desc2, lv_obj_get_width(desc2));
-	lv_obj_align(desc2, val, LV_ALIGN_OUT_RIGHT_MID, LV_DPI / 2, 0);
+	lv_obj_align(desc2, val, LV_ALIGN_OUT_RIGHT_MID, LV_DPI / 5 * 3, 0);
 
 	lv_obj_t *val2 = lv_cont_create(win, NULL);
-	lv_obj_set_size(val2, LV_HOR_RES / 13 * 3, LV_VER_RES - (LV_DPI * 11 / 8) * 5 / 2);
+	lv_obj_set_size(val2, LV_HOR_RES / 4, LV_VER_RES - (LV_DPI * 11 / 8) * 5 / 2);
 
 	lv_obj_t * lb_val2 = lv_label_create(val2, lb_desc);
 
@@ -2071,7 +2228,7 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 	sd_storage_get_fmodes(&sd_storage, NULL, &fmodes);
 
 	char *bus_speed;
-	if      (fmodes.cmd_system & SD_MODE_UHS_DDR200)
+	if      (fmodes.cmd_system  & SD_MODE_UHS_DDR200)
 		bus_speed = "DDR200";
 	else if (fmodes.access_mode & SD_MODE_UHS_SDR104)
 		bus_speed = "SDR104";
@@ -2084,15 +2241,64 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 	else
 		bus_speed = "SDR12";
 
+	char *cpe = NULL;
+	if (sd_storage.ssr.app_class == 2)
+	{
+		u8 *buf = zalloc(512);
+
+		// Directly get and parse ext reg for performance enhance.
+		sd_storage_parse_perf_enhance(&sd_storage, 2, 0, 0, buf);
+
+		bool has_perf_enhance = sd_storage.ser.cache &&
+							sd_storage.ser.cmdq  &&
+							sd_storage.ser.cache == sd_storage.ser.cache_ext &&
+							sd_storage.ser.cmdq  == sd_storage.ser.cmdq_ext;
+		if (has_perf_enhance)
+			cpe = "#FFDD00 "; // CMDQ/CACHE support via a quirk.
+		else
+			cpe = "#FF3C28 "; // Broken.
+
+		// Get and parse ext reg for performance enhance in spec.
+		sd_storage_get_ext_regs(&sd_storage, buf);
+
+		if (sd_storage.ser.valid)
+		{
+			has_perf_enhance = sd_storage.ser.cache &&
+							   sd_storage.ser.cmdq  &&
+							   sd_storage.ser.cache == sd_storage.ser.cache_ext &&
+							   sd_storage.ser.cmdq  == sd_storage.ser.cmdq_ext;
+
+			if (has_perf_enhance)
+				cpe = NULL; // CMDQ/CACHE support in spec.
+			else
+				cpe = "#FF3C28 "; // Broken.
+		}
+
+		free(buf);
+	}
+
 	s_printf(txt_buf,
-		"#00DDFF v%d.0#\n%02X\n%d MiB\n%X (CP %X)\n%d\n%d MB/s (%d MHz)\n%d (AU: %d %s\nU%d V%d A%d\n%s\n\n%s",
-		sd_storage.csd.structure + 1, sd_storage.csd.cmdclass,
-		sd_storage.sec_cnt >> 11, sd_storage.sec_cnt, sd_storage.ssr.protected_size >> 9,
-		sd_storage.ssr.bus_width, sd_storage.csd.busspeed,
+		"#00DDFF v%d.0#\n"
+		"%02X\n"
+		"%d MiB\n"
+		"%X (CP %X)\n"
+		"%d\n"
+		"%d MB/s (%d MHz)\n"
+		"%d (AU: %d %s\n"
+		"U%d V%d %sA%d%s\n"
+		"%s\n\n"
+		"%s",
+		sd_storage.csd.structure + 1,
+		sd_storage.csd.cmdclass,
+		sd_storage.sec_cnt >> 11,
+		sd_storage.sec_cnt, sd_storage.ssr.protected_size >> 9,
+		sd_storage.ssr.bus_width,
+		sd_storage.csd.busspeed,
 		(sd_storage.csd.busspeed > 10) ? (sd_storage.csd.busspeed * 2) : 50,
 		sd_storage.ssr.speed_class, uhs_au_size, uhs_au_mb ? "MiB)" : "KiB)",
-		sd_storage.ssr.uhs_grade, sd_storage.ssr.video_class, sd_storage.ssr.app_class,
-		bus_speed, wp_info);
+		sd_storage.ssr.uhs_grade, sd_storage.ssr.video_class, cpe ? cpe : "", sd_storage.ssr.app_class, cpe ? "#" : "",
+		bus_speed,
+		wp_info);
 
 	lv_label_set_text(lb_val2, txt_buf);
 
@@ -2109,29 +2315,70 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 	lv_obj_set_size(desc3, LV_HOR_RES / 2 / 2 * 2, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
 
 	lv_obj_t * lb_desc3 = lv_label_create(desc3, lb_desc);
-	lv_label_set_text(lb_desc3, "#D4FF00 Acquiring FAT volume info...#");
+	lv_label_set_text(lb_desc3, "#D4FF00 Acquiring info...#");
 	lv_obj_set_width(lb_desc3, lv_obj_get_width(desc3));
 
 	lv_obj_align(desc3, desc, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 2);
 
 	manual_system_maintenance(true);
 
+	lv_obj_set_size(desc3, LV_HOR_RES / 2 / 6 * 2, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
+	lv_obj_align(desc3, desc, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 2);
+
+	lv_obj_t *val3 = lv_cont_create(win, NULL);
+	lv_obj_set_size(val3, LV_HOR_RES / 12 * 3, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
+
+	lv_obj_t * lb_val3 = lv_label_create(val3, lb_desc);
+	lv_label_set_text(lb_val3, "");
+
+	lv_obj_align(val3, desc3, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
+
+	lv_obj_t *desc4 = lv_cont_create(win, NULL);
+	lv_obj_set_size(desc4, LV_HOR_RES / 2 / 2 * 2, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
+
+	lv_obj_t * lb_desc4 = lv_label_create(desc4, lb_desc);
+	lv_label_set_text(lb_desc4, "                             ");
+	lv_obj_set_width(lb_desc4, lv_obj_get_width(desc4));
+
+	lv_label_set_text(lb_desc4,
+		"#00DDFF SDMMC1 Errors:#\n"
+		"Init fails:\n"
+		"Read/Write fails:\n"
+		"Read/Write errors:"
+	);
+	lv_obj_set_size(desc4, LV_HOR_RES / 2 / 11 * 5, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
+	lv_obj_set_width(lb_desc4, lv_obj_get_width(desc4));
+	lv_obj_align(desc4, val3, LV_ALIGN_OUT_RIGHT_MID, LV_DPI / 5 * 3, 0);
+
+	lv_obj_t *val4 = lv_cont_create(win, NULL);
+	lv_obj_set_size(val4, LV_HOR_RES / 4, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
+
+	lv_obj_t *lb_val4 = lv_label_create(val4, lb_desc);
+	bench_sd_err_label = lb_val4;
+
+	u16 *sd_errors = sd_get_error_count();
+	s_printf(txt_buf, "\n%d (%d)\n%d (%d)\n%d (%d)",
+		sd_errors[SD_ERROR_INIT_FAIL], nyx_str->info.sd_errors[SD_ERROR_INIT_FAIL],
+		sd_errors[SD_ERROR_RW_FAIL],   nyx_str->info.sd_errors[SD_ERROR_RW_FAIL],
+		sd_errors[SD_ERROR_RW_RETRY],  nyx_str->info.sd_errors[SD_ERROR_RW_RETRY]);
+
+	lv_label_set_text(lb_val4, txt_buf);
+
+	lv_obj_set_width(lb_val4, lv_obj_get_width(val4));
+	lv_obj_align(val4, desc4, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
+
+	manual_system_maintenance(true);
+
 	f_getfree("", &sd_fs.free_clst, NULL);
 
 	lv_label_set_text(lb_desc3,
-		"#00DDFF Found FAT volume:#\n"
+		"#00DDFF Found FAT FS:#\n"
 		"Filesystem:\n"
 		"Cluster:\n"
 		"Size free/total:"
 	);
-	lv_obj_set_size(desc3, LV_HOR_RES / 2 / 5 * 2, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
+
 	lv_obj_set_width(lb_desc3, lv_obj_get_width(desc3));
-	lv_obj_align(desc3, desc, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 2);
-
-	lv_obj_t *val3 = lv_cont_create(win, NULL);
-	lv_obj_set_size(val3, LV_HOR_RES / 13 * 3, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
-
-	lv_obj_t * lb_val3 = lv_label_create(val3, lb_desc);
 
 	s_printf(txt_buf, "\n%s\n%d %s\n%d/%d MiB",
 		sd_fs.fs_type == FS_EXFAT ? ("exFAT  "SYMBOL_SHRK) : ("FAT32"),
@@ -2143,40 +2390,6 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 	lv_label_set_text(lb_val3, txt_buf);
 
 	lv_obj_set_width(lb_val3, lv_obj_get_width(val3));
-	lv_obj_align(val3, desc3, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
-
-	lv_obj_t *desc4 = lv_cont_create(win, NULL);
-	lv_obj_set_size(desc4, LV_HOR_RES / 2 / 2 * 2, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
-
-	lv_obj_t * lb_desc4 = lv_label_create(desc4, lb_desc);
-	lv_label_set_text(lb_desc4, "#D4FF00 Acquiring FAT volume info...#");
-	lv_obj_set_width(lb_desc4, lv_obj_get_width(desc4));
-
-	lv_label_set_text(lb_desc4,
-		"#00DDFF SDMMC1 Errors:#\n"
-		"Init fails:\n"
-		"Read/Write fails:\n"
-		"Read/Write errors:"
-	);
-	lv_obj_set_size(desc4, LV_HOR_RES / 2 / 5 * 2, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
-	lv_obj_set_width(lb_desc4, lv_obj_get_width(desc4));
-	lv_obj_align(desc4, val3, LV_ALIGN_OUT_RIGHT_MID, LV_DPI / 2, 0);
-
-	lv_obj_t *val4 = lv_cont_create(win, NULL);
-	lv_obj_set_size(val4, LV_HOR_RES / 13 * 3, LV_VER_RES - (LV_DPI * 11 / 8) * 4);
-
-	lv_obj_t * lb_val4 = lv_label_create(val4, lb_desc);
-
-	u16 *sd_errors = sd_get_error_count();
-	s_printf(txt_buf, "\n%d (%d)\n%d (%d)\n%d (%d)",
-		sd_errors[SD_ERROR_INIT_FAIL], nyx_str->info.sd_errors[SD_ERROR_INIT_FAIL],
-		sd_errors[SD_ERROR_RW_FAIL],   nyx_str->info.sd_errors[SD_ERROR_RW_FAIL],
-		sd_errors[SD_ERROR_RW_RETRY],  nyx_str->info.sd_errors[SD_ERROR_RW_RETRY]);
-
-	lv_label_set_text(lb_val4, txt_buf);
-
-	lv_obj_set_width(lb_val4, lv_obj_get_width(val4));
-	lv_obj_align(val4, desc4, LV_ALIGN_OUT_RIGHT_MID, LV_DPI / 2, 0);
 
 	free(txt_buf);
 	sd_unmount();
@@ -2225,46 +2438,51 @@ static lv_res_t _create_window_battery_status(lv_obj_t *btn)
 
 	char *txt_buf = (char *)malloc(SZ_16K);
 	int value = 0;
-	int cap_pct = 0;
 
 	// Fuel gauge IC info.
-	max17050_get_property(MAX17050_RepSOC, &cap_pct);
-	max17050_get_property(MAX17050_RepCap, &value);
-	s_printf(txt_buf, "\n%d mAh [%d %%]\n", value, cap_pct >> 8);
+	if (!max17050_get_version(NULL))
+	{
+		int cap_pct = 0;
+		max17050_get_property(MAX17050_RepSOC, &cap_pct);
+		max17050_get_property(MAX17050_RepCap, &value);
+		s_printf(txt_buf, "\n%d mAh [%d %%]\n", value, cap_pct >> 8);
 
-	max17050_get_property(MAX17050_FullCAP, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mAh\n", value);
+		max17050_get_property(MAX17050_FullCAP, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d mAh\n", value);
 
-	max17050_get_property(MAX17050_DesignCap, &value);
-	bool design_cap_init = value == 1000;
-	s_printf(txt_buf + strlen(txt_buf), "%s%d mAh%s\n",
-		design_cap_init ? "#FF8000 " : "", value,  design_cap_init ? " - Init "SYMBOL_WARNING"#" : "");
+		max17050_get_property(MAX17050_DesignCap, &value);
+		bool design_cap_init = value == 1000;
+		s_printf(txt_buf + strlen(txt_buf), "%s%d mAh%s\n",
+			design_cap_init ? "#FF8000 " : "", value,  design_cap_init ? " - Init "SYMBOL_WARNING"#" : "");
 
-	max17050_get_property(MAX17050_Current, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mA\n", value / 1000);
+		max17050_get_property(MAX17050_Current, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d mA\n", value / 1000);
 
-	max17050_get_property(MAX17050_AvgCurrent, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mA\n", value / 1000);
+		max17050_get_property(MAX17050_AvgCurrent, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d mA\n", value / 1000);
 
-	max17050_get_property(MAX17050_VCELL, &value);
-	bool voltage_empty = value < 3200;
-	s_printf(txt_buf + strlen(txt_buf), "%s%d mV%s\n",
-		voltage_empty ? "#FF8000 " : "", value,  voltage_empty ? " - Low "SYMBOL_WARNING"#" : "");
+		max17050_get_property(MAX17050_VCELL, &value);
+		bool voltage_empty = value < 3200;
+		s_printf(txt_buf + strlen(txt_buf), "%s%d mV%s\n",
+			voltage_empty ? "#FF8000 " : "", value,  voltage_empty ? " - Low "SYMBOL_WARNING"#" : "");
 
-	max17050_get_property(MAX17050_OCVInternal, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
+		max17050_get_property(MAX17050_OCVInternal, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
 
-	max17050_get_property(MAX17050_MinVolt, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
+		max17050_get_property(MAX17050_MinVolt, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
 
-	max17050_get_property(MAX17050_MaxVolt, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
+		max17050_get_property(MAX17050_MaxVolt, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
 
-	max17050_get_property(MAX17050_V_empty, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
+		max17050_get_property(MAX17050_V_empty, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
 
-	max17050_get_property(MAX17050_TEMP, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d.%d oC\n\n\n", value / 10, (value >= 0 ? value : (~value + 1)) % 10);
+		max17050_get_property(MAX17050_TEMP, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d.%d oC\n\n\n", value / 10, (value >= 0 ? value : (~value + 1)) % 10);
+	}
+	else
+		strcpy(txt_buf, "\n#FF8000 "SYMBOL_WARNING" Error!#\n\n\n\n\n\n\n\n\n\n\n\n\n");
 
 	// Main Pmic IC info.
 	value = i2c_recv_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_CID4);
@@ -2325,93 +2543,104 @@ static lv_res_t _create_window_battery_status(lv_obj_t *btn)
 	lv_obj_set_size(val2, LV_HOR_RES / 2 / 3, LV_VER_RES - (LV_DPI * 11 / 7) - 5);
 
 	lv_obj_t * lb_val2 = lv_label_create(val2, lb_desc);
+	int iinlim = 0;
 
 	// Charger IC info.
-	int iinlim = 0;
-	bq24193_get_property(BQ24193_InputCurrentLimit, &iinlim);
-	s_printf(txt_buf, "\n%d mA\n", iinlim);
-
-	bq24193_get_property(BQ24193_SystemMinimumVoltage, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
-
-	bq24193_get_property(BQ24193_FastChargeCurrentLimit, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mA\n", value);
-
-	bq24193_get_property(BQ24193_ChargeVoltageLimit, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
-
-	bq24193_get_property(BQ24193_ChargeStatus, &value);
-	switch (value)
+	if (!bq24193_get_version(NULL))
 	{
-	case 0:
-		strcat(txt_buf, "Not charging\n");
-		break;
-	case 1:
-		strcat(txt_buf, "Pre-charging\n");
-		break;
-	case 2:
-		strcat(txt_buf, "Fast charging\n");
-		break;
-	case 3:
-		strcat(txt_buf, "Charge terminated\n");
-		break;
-	default:
-		s_printf(txt_buf + strlen(txt_buf), "Unknown (%d)\n", value);
-		break;
-	}
+		bq24193_get_property(BQ24193_InputCurrentLimit, &iinlim);
+		s_printf(txt_buf, "\n%d mA\n", iinlim);
 
-	bq24193_get_property(BQ24193_TempStatus, &value);
-	switch (value)
-	{
-	case 0:
-		strcat(txt_buf, "Normal");
-		break;
-	case 2:
-		strcat(txt_buf, "Warm");
-		break;
-	case 3:
-		strcat(txt_buf, "Cool");
-		break;
-	case 5:
-		strcat(txt_buf, "#FF8000 Cold#");
-		break;
-	case 6:
-		strcat(txt_buf, "#FF8000 Hot#");
-		break;
-	default:
-		s_printf(txt_buf + strlen(txt_buf), "Unknown (%d)", value);
-		break;
+		bq24193_get_property(BQ24193_SystemMinimumVoltage, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
+
+		bq24193_get_property(BQ24193_FastChargeCurrentLimit, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d mA\n", value);
+
+		bq24193_get_property(BQ24193_ChargeVoltageLimit, &value);
+		s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
+
+		bq24193_get_property(BQ24193_ChargeStatus, &value);
+		switch (value)
+		{
+		case 0:
+			strcat(txt_buf, "Not charging\n");
+			break;
+		case 1:
+			strcat(txt_buf, "Pre-charging\n");
+			break;
+		case 2:
+			strcat(txt_buf, "Fast charging\n");
+			break;
+		case 3:
+			strcat(txt_buf, "Charge terminated\n");
+			break;
+		default:
+			s_printf(txt_buf + strlen(txt_buf), "Unknown (%d)\n", value);
+			break;
+		}
+
+		bq24193_get_property(BQ24193_TempStatus, &value);
+		switch (value)
+		{
+		case 0:
+			strcat(txt_buf, "Normal");
+			break;
+		case 2:
+			strcat(txt_buf, "Warm");
+			break;
+		case 3:
+			strcat(txt_buf, "Cool");
+			break;
+		case 5:
+			strcat(txt_buf, "#FF8000 Cold#");
+			break;
+		case 6:
+			strcat(txt_buf, "#FF8000 Hot#");
+			break;
+		default:
+			s_printf(txt_buf + strlen(txt_buf), "Unknown (%d)", value);
+			break;
+		}
 	}
+	else
+		strcpy(txt_buf, "\n#FF8000 "SYMBOL_WARNING" Error!#\n\n\n\n\n");
+
+	strcat(txt_buf, "\n\n\n");
 
 	// USB-PD IC info.
-	bool inserted;
-	u32 wattage = 0;
-	usb_pd_objects_t usb_pd;
-	bm92t36_get_sink_info(&inserted, &usb_pd);
-	strcat(txt_buf, "\n\n\n");
-	strcat(txt_buf, inserted ? "Connected" : "Disconnected");
-
-	// Select 5V is no PD contract.
-	wattage = iinlim * (usb_pd.pdo_no ? usb_pd.selected_pdo.voltage : 5);
-
-	s_printf(txt_buf + strlen(txt_buf), "\n%d.%d W", wattage / 1000, (wattage % 1000) / 100);
-
-	if (!usb_pd.pdo_no)
-		strcat(txt_buf, "\nNon PD");
-
-	// Limit to 6 profiles so it can fit.
-	usb_pd.pdo_no = MIN(usb_pd.pdo_no, 6);
-
-	for (u32 i = 0; i < usb_pd.pdo_no; i++)
+	if (!bm92t36_get_version(NULL))
 	{
-		bool selected =
-			usb_pd.pdos[i].amperage == usb_pd.selected_pdo.amperage &&
-			usb_pd.pdos[i].voltage == usb_pd.selected_pdo.voltage;
-		s_printf(txt_buf + strlen(txt_buf), "\n%s%d mA, %2d V%s",
-			selected ? "#D4FF00 " : "",
-			usb_pd.pdos[i].amperage, usb_pd.pdos[i].voltage,
-			selected ? "#" : "");
+		bool inserted;
+		u32 wattage = 0;
+		usb_pd_objects_t usb_pd;
+		bm92t36_get_sink_info(&inserted, &usb_pd);
+		strcat(txt_buf, inserted ? "Connected" : "Disconnected");
+
+		// Select 5V is no PD contract.
+		wattage = iinlim * (usb_pd.pdo_no ? usb_pd.selected_pdo.voltage : 5);
+
+		s_printf(txt_buf + strlen(txt_buf), "\n%d.%d W", wattage / 1000, (wattage % 1000) / 100);
+
+		if (!usb_pd.pdo_no)
+			strcat(txt_buf, "\nNon PD");
+
+		// Limit to 6 profiles so it can fit.
+		usb_pd.pdo_no = MIN(usb_pd.pdo_no, 6);
+
+		for (u32 i = 0; i < usb_pd.pdo_no; i++)
+		{
+			bool selected =
+				usb_pd.pdos[i].amperage == usb_pd.selected_pdo.amperage &&
+				usb_pd.pdos[i].voltage == usb_pd.selected_pdo.voltage;
+			s_printf(txt_buf + strlen(txt_buf), "\n%s%d mA, %2d V%s",
+				selected ? "#D4FF00 " : "",
+				usb_pd.pdos[i].amperage, usb_pd.pdos[i].voltage,
+				selected ? "#" : "");
+		}
 	}
+	else
+		strcat(txt_buf, "#FF8000 "SYMBOL_WARNING" Error!#");
 
 	lv_label_set_text(lb_val2, txt_buf);
 
@@ -2551,7 +2780,7 @@ void create_tab_info(lv_theme_t *th, lv_obj_t *parent)
 	lv_btn_set_fit(btn3, true, true);
 	lv_label_set_static_text(label_btn, SYMBOL_CIRCUIT"  HW & Fuses");
 	lv_obj_align(btn3, line_sep, LV_ALIGN_OUT_BOTTOM_LEFT, LV_DPI / 4, LV_DPI / 2);
-	lv_btn_set_action(btn3, LV_BTN_ACTION_CLICK, _create_window_fuses_info_status);
+	lv_btn_set_action(btn3, LV_BTN_ACTION_CLICK, _create_window_hw_info_status);
 
 	// Create KFuses button.
 	lv_obj_t *btn4 = lv_btn_create(h1, btn);
