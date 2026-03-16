@@ -163,6 +163,12 @@
 #define MAX77621_CTRL_POR_CFG 1
 
 int  max77620_regulator_get_status(u32 id);
+int  max7762x_regulator_get_config(u32 id);
+int  max7762x_regulator_get_fps_src(u32 id);
+int  max7762x_regulator_get_enable(u32 id);
+int  max7762x_regulator_get_power_ok(u32 id);
+int  max7762x_regulator_get_voltage(u32 id);
+const char *max7762x_regulator_get_name(u32 id);
 int  max77620_regulator_config_fps(u32 id);
 int  max7762x_regulator_set_voltage(u32 id, u32 uv);
 int  max7762x_regulator_enable(u32 id, bool enable);

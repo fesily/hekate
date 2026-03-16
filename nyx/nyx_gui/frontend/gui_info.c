@@ -36,6 +36,561 @@ extern volatile nyx_storage_t *nyx_str;
 extern lv_res_t launch_payload(lv_obj_t *list);
 extern char *emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
 
+static lv_res_t _create_window_pmic_info_status(lv_obj_t *btn);
+static lv_res_t _create_window_pmic_test_status(lv_obj_t *btn);
+static lv_res_t _action_win_pmic_info_close(lv_obj_t *btn);
+static lv_res_t _pmic_refresh_action(lv_obj_t *btn);
+static lv_res_t _create_window_screen_test(lv_obj_t *btn);
+
+static lv_obj_t *pmic_info_label;
+
+enum screen_test_pattern_id {
+	SCREEN_TEST_PATTERN_WHITE,
+	SCREEN_TEST_PATTERN_BLACK,
+	SCREEN_TEST_PATTERN_RED,
+	SCREEN_TEST_PATTERN_GREEN,
+	SCREEN_TEST_PATTERN_BLUE,
+	SCREEN_TEST_PATTERN_GRAYSCALE,
+	SCREEN_TEST_PATTERN_RGBW,
+	SCREEN_TEST_PATTERN_CHECKERBOARD,
+	SCREEN_TEST_PATTERN_COLOR_BARS,
+	SCREEN_TEST_PATTERN_GRID,
+	SCREEN_TEST_PATTERN_YELLOW,
+	SCREEN_TEST_PATTERN_CYAN,
+	SCREEN_TEST_PATTERN_MAGENTA,
+	SCREEN_TEST_PATTERN_COUNT,
+};
+
+typedef struct _screen_test_ctx_t
+{
+	lv_obj_t *overlay;
+	lv_obj_t *img;
+	lv_img_dsc_t img_dsc;
+	lv_task_t *task;
+	u32 *fb;
+	u32 pattern_idx;
+	u32 ignore_until_ms;
+	u32 press_start_ms;
+	u16 press_start_x;
+	u16 press_start_y;
+	bool pressed;
+	bool moved;
+} screen_test_ctx_t;
+
+static screen_test_ctx_t *screen_test;
+
+#define PMIC_TEST_ID_MASK    0xFF
+#define PMIC_TEST_ALLOW_MASK BIT(8)
+
+static const u32 _pmic_regs_t210[] = {
+	REGULATOR_SD0, REGULATOR_SD1, REGULATOR_SD2, REGULATOR_SD3,
+	REGULATOR_LDO0, REGULATOR_LDO1, REGULATOR_LDO2, REGULATOR_LDO3, REGULATOR_LDO4,
+	REGULATOR_LDO5, REGULATOR_LDO6, REGULATOR_LDO7, REGULATOR_LDO8,
+	REGULATOR_CPU0, REGULATOR_GPU0
+};
+static const u32 _pmic_regs_t210b01[] = {
+	REGULATOR_SD0, REGULATOR_SD1, REGULATOR_SD2, REGULATOR_SD3,
+	REGULATOR_LDO0, REGULATOR_LDO1, REGULATOR_LDO2, REGULATOR_LDO3, REGULATOR_LDO4,
+	REGULATOR_LDO5, REGULATOR_LDO6, REGULATOR_LDO7, REGULATOR_LDO8,
+	REGULATOR_CPU1, REGULATOR_RAM0
+};
+
+static void _pmic_get_regs(const u32 **pmic_regs, u32 *pmic_regs_cnt)
+{
+	if (h_cfg.t210b01)
+	{
+		*pmic_regs = _pmic_regs_t210b01;
+		*pmic_regs_cnt = ARRAY_SIZE(_pmic_regs_t210b01);
+	}
+	else
+	{
+		*pmic_regs = _pmic_regs_t210;
+		*pmic_regs_cnt = ARRAY_SIZE(_pmic_regs_t210);
+	}
+}
+
+static char *_pmic_cfg_state(u32 reg_id, int cfg)
+{
+	if (cfg < 0)
+		return "N/A";
+
+	if (reg_id <= REGULATOR_LDO8)
+	{
+		switch (cfg)
+		{
+		case MAX77620_POWER_MODE_DISABLE:
+			return "Off";
+		case MAX77620_POWER_MODE_GLPM:
+			return "GLPM";
+		case MAX77620_POWER_MODE_LPM:
+			return "LPM";
+		case MAX77620_POWER_MODE_NORMAL:
+			return "Nrm";
+		default:
+			return "?";
+		}
+	}
+
+	return cfg ? "On" : "Off";
+}
+
+static char *_pmic_cfg_state_color(u32 reg_id, int cfg)
+{
+	char *cfg_txt = _pmic_cfg_state(reg_id, cfg);
+
+	if (!strcmp(cfg_txt, "N/A"))
+		return "#FFDD00 N/A#";
+	if (!strcmp(cfg_txt, "Off"))
+		return "#FF8000 Off#";
+	if (!strcmp(cfg_txt, "GLPM"))
+		return "#FFDD00 GLPM#";
+	if (!strcmp(cfg_txt, "LPM"))
+		return "#C7EA46 LPM#";
+	if (!strcmp(cfg_txt, "Nrm"))
+		return "#96FF00 Nrm#";
+	if (!strcmp(cfg_txt, "On"))
+		return "#96FF00 On#";
+
+	return "#FFDD00 ?#";
+}
+
+static char *_pmic_fps_state(int fps_src)
+{
+	if (fps_src < 0)
+		return "N/A";
+
+	switch (fps_src)
+	{
+	case MAX77620_FPS_SRC_0:
+		return "FPS0";
+	case MAX77620_FPS_SRC_1:
+		return "FPS1";
+	case MAX77620_FPS_SRC_2:
+		return "FPS2";
+	case MAX77620_FPS_SRC_NONE:
+		return "None";
+	default:
+		return "?";
+	}
+}
+
+static char *_pmic_fps_state_color(int fps_src)
+{
+	char *fps_txt = _pmic_fps_state(fps_src);
+
+	if (!strcmp(fps_txt, "N/A"))
+		return "#FFDD00 N/A#";
+	if (!strcmp(fps_txt, "None"))
+		return "#FF8000 None#";
+	if (!strcmp(fps_txt, "FPS0") || !strcmp(fps_txt, "FPS1") || !strcmp(fps_txt, "FPS2"))
+		return "#96FF00 FPS#";
+
+	return "#FFDD00 ?#";
+}
+
+static char *_pmic_enable_state_color(int enable)
+{
+	if (enable < 0)
+		return "#FFDD00 N/A#";
+	if (enable)
+		return "#96FF00 On#";
+
+	return "#FF8000 Off#";
+}
+
+static char *_pmic_pok_state_color(int power_ok)
+{
+	if (power_ok < 0)
+		return "#FFDD00 N/A#";
+	if (power_ok)
+		return "#96FF00 OK#";
+
+	return "#FF3C28 Bad#";
+}
+
+static u32 _screen_test_color(u8 red, u8 green, u8 blue)
+{
+	return 0xFF000000 | (red << 16) | (green << 8) | blue;
+}
+
+static void _screen_test_fill(screen_test_ctx_t *ctx, u32 color)
+{
+	u32 px_count = LV_HOR_RES * LV_VER_RES;
+	for (u32 i = 0; i < px_count; i++)
+		ctx->fb[i] = color;
+}
+
+static void _screen_test_fill_rect(screen_test_ctx_t *ctx, s32 x, s32 y, s32 width, s32 height, u32 color)
+{
+	if (x >= LV_HOR_RES || y >= LV_VER_RES || width <= 0 || height <= 0)
+		return;
+
+	if (x < 0)
+	{
+		width += x;
+		x = 0;
+	}
+	if (y < 0)
+	{
+		height += y;
+		y = 0;
+	}
+	if ((x + width) > LV_HOR_RES)
+		width = LV_HOR_RES - x;
+	if ((y + height) > LV_VER_RES)
+		height = LV_VER_RES - y;
+
+	for (s32 row = 0; row < height; row++)
+	{
+		u32 *dst = &ctx->fb[(y + row) * LV_HOR_RES + x];
+		for (s32 col = 0; col < width; col++)
+			dst[col] = color;
+	}
+}
+
+static void _screen_test_render_pattern(screen_test_ctx_t *ctx)
+{
+	const u32 black = _screen_test_color(0x00, 0x00, 0x00);
+	const u32 white = _screen_test_color(0xFF, 0xFF, 0xFF);
+	const u32 red   = _screen_test_color(0xFF, 0x00, 0x00);
+	const u32 green = _screen_test_color(0x00, 0xFF, 0x00);
+	const u32 blue  = _screen_test_color(0x00, 0x00, 0xFF);
+
+	switch (ctx->pattern_idx)
+	{
+	case SCREEN_TEST_PATTERN_BLACK:
+		_screen_test_fill(ctx, black);
+		break;
+	case SCREEN_TEST_PATTERN_WHITE:
+		_screen_test_fill(ctx, white);
+		break;
+	case SCREEN_TEST_PATTERN_RED:
+		_screen_test_fill(ctx, red);
+		break;
+	case SCREEN_TEST_PATTERN_GREEN:
+		_screen_test_fill(ctx, green);
+		break;
+	case SCREEN_TEST_PATTERN_BLUE:
+		_screen_test_fill(ctx, blue);
+		break;
+	case SCREEN_TEST_PATTERN_GRAYSCALE:
+		{
+		const u32 steps = 8;
+		const u32 step_w = LV_HOR_RES / steps;
+		for (u32 step = 0; step < steps; step++)
+		{
+			u8 level = step * 255 / (steps - 1);
+			u32 color = _screen_test_color(level, level, level);
+			s32 x = step * step_w;
+			s32 width = (step == (steps - 1)) ? ((s32)LV_HOR_RES - x) : (s32)step_w;
+			_screen_test_fill_rect(ctx, x, 0, width, LV_VER_RES, color);
+		}
+		}
+		break;
+	case SCREEN_TEST_PATTERN_RGBW:
+		_screen_test_fill_rect(ctx, 0, 0, LV_HOR_RES / 2, LV_VER_RES / 2, red);
+		_screen_test_fill_rect(ctx, LV_HOR_RES / 2, 0, LV_HOR_RES - LV_HOR_RES / 2, LV_VER_RES / 2, green);
+		_screen_test_fill_rect(ctx, 0, LV_VER_RES / 2, LV_HOR_RES / 2, LV_VER_RES - LV_VER_RES / 2, blue);
+		_screen_test_fill_rect(ctx, LV_HOR_RES / 2, LV_VER_RES / 2, LV_HOR_RES - LV_HOR_RES / 2,
+			LV_VER_RES - LV_VER_RES / 2, white);
+		break;
+	case SCREEN_TEST_PATTERN_CHECKERBOARD:
+		{
+		u32 tile = MIN(LV_HOR_RES, LV_VER_RES) / 8;
+		if (tile < 24)
+			tile = 24;
+		for (u32 y = 0; y < LV_VER_RES; y += tile)
+			for (u32 x = 0; x < LV_HOR_RES; x += tile)
+			{
+				u32 color = (((x / tile) + (y / tile)) & 1) ? white : black;
+				_screen_test_fill_rect(ctx, x, y, MIN(tile, LV_HOR_RES - x), MIN(tile, LV_VER_RES - y), color);
+			}
+		}
+		break;
+	case SCREEN_TEST_PATTERN_COLOR_BARS:
+		{
+		static const u32 colors[] = {
+			0xFFFFFFFF,
+			0xFFFFFF00,
+			0xFF00FFFF,
+			0xFF00FF00,
+			0xFFFF00FF,
+			0xFFFF0000,
+			0xFF0000FF,
+			0xFF000000,
+		};
+		const u32 bar_w = LV_HOR_RES / ARRAY_SIZE(colors);
+		for (u32 i = 0; i < ARRAY_SIZE(colors); i++)
+		{
+			s32 x = i * bar_w;
+			s32 width = (i == ARRAY_SIZE(colors) - 1) ? ((s32)LV_HOR_RES - x) : (s32)bar_w;
+			_screen_test_fill_rect(ctx, x, 0, width, LV_VER_RES, colors[i]);
+		}
+		}
+		break;
+	case SCREEN_TEST_PATTERN_GRID:
+		_screen_test_fill(ctx, black);
+		for (u32 x = 0; x < LV_HOR_RES; x += LV_HOR_RES / 10)
+			_screen_test_fill_rect(ctx, x, 0, 2, LV_VER_RES, white);
+		for (u32 y = 0; y < LV_VER_RES; y += LV_VER_RES / 16)
+			_screen_test_fill_rect(ctx, 0, y, LV_HOR_RES, 2, white);
+		_screen_test_fill_rect(ctx, LV_HOR_RES / 2 - 2, 0, 4, LV_VER_RES, _screen_test_color(0xFF, 0x80, 0x00));
+		_screen_test_fill_rect(ctx, 0, LV_VER_RES / 2 - 2, LV_HOR_RES, 4, _screen_test_color(0xFF, 0x80, 0x00));
+		_screen_test_fill_rect(ctx, 0, 0, LV_HOR_RES, 4, white);
+		_screen_test_fill_rect(ctx, 0, LV_VER_RES - 4, LV_HOR_RES, 4, white);
+		_screen_test_fill_rect(ctx, 0, 0, 4, LV_VER_RES, white);
+		_screen_test_fill_rect(ctx, LV_HOR_RES - 4, 0, 4, LV_VER_RES, white);
+		break;
+	case SCREEN_TEST_PATTERN_YELLOW:
+		_screen_test_fill(ctx, _screen_test_color(0xFF, 0xFF, 0x00));
+		break;
+	case SCREEN_TEST_PATTERN_CYAN:
+		_screen_test_fill(ctx, _screen_test_color(0x00, 0xFF, 0xFF));
+		break;
+	case SCREEN_TEST_PATTERN_MAGENTA:
+		_screen_test_fill(ctx, _screen_test_color(0xFF, 0x00, 0xFF));
+		break;
+	default:
+		_screen_test_fill(ctx, black);
+		break;
+	}
+
+	lv_img_set_src(ctx->img, &ctx->img_dsc);
+	lv_obj_invalidate(ctx->img);
+}
+
+static void _screen_test_close(void)
+{
+	if (!screen_test)
+		return;
+
+	if (screen_test->task)
+	{
+		lv_task_del(screen_test->task);
+		screen_test->task = NULL;
+	}
+
+	if (screen_test->overlay)
+		lv_obj_del(screen_test->overlay);
+
+	free(screen_test->fb);
+	free(screen_test);
+	screen_test = NULL;
+}
+
+static void _screen_test_touch_poll(void *param)
+{
+	screen_test_ctx_t *ctx = param;
+	touch_event event;
+	u32 now = get_tmr_ms();
+	bool active = nyx_get_touch_event(&event) && event.touch;
+
+	if (!ctx->pressed)
+	{
+		if (active)
+		{
+			ctx->pressed = true;
+			ctx->moved = false;
+			ctx->press_start_ms = now;
+			ctx->press_start_x = event.x;
+			ctx->press_start_y = event.y;
+		}
+
+		return;
+	}
+
+	if (active)
+	{
+		if (abs((int)event.x - (int)ctx->press_start_x) > 24 || abs((int)event.y - (int)ctx->press_start_y) > 24)
+			ctx->moved = true;
+
+		return;
+	}
+
+	ctx->pressed = false;
+
+	if ((u32)(now - ctx->press_start_ms) > 300 || ctx->moved || now < ctx->ignore_until_ms)
+		return;
+
+	if ((ctx->pattern_idx + 1) >= SCREEN_TEST_PATTERN_COUNT)
+	{
+		_screen_test_close();
+		return;
+	}
+
+	ctx->pattern_idx++;
+	_screen_test_render_pattern(ctx);
+}
+
+static lv_res_t _create_window_screen_test(lv_obj_t *btn)
+{
+	static lv_style_t overlay_style;
+
+	if (screen_test)
+		_screen_test_close();
+
+	screen_test = zalloc(sizeof(screen_test_ctx_t));
+	if (!screen_test)
+		return LV_RES_OK;
+
+	screen_test->fb = malloc(LV_HOR_RES * LV_VER_RES * sizeof(u32));
+	if (!screen_test->fb)
+	{
+		free(screen_test);
+		screen_test = NULL;
+		return LV_RES_OK;
+	}
+
+	lv_style_copy(&overlay_style, &lv_style_plain_color);
+	overlay_style.body.main_color = LV_COLOR_BLACK;
+	overlay_style.body.grad_color = LV_COLOR_BLACK;
+	overlay_style.body.radius = 0;
+	overlay_style.body.border.width = 0;
+	overlay_style.body.shadow.width = 0;
+	overlay_style.body.padding.hor = 0;
+	overlay_style.body.padding.ver = 0;
+	overlay_style.body.padding.inner = 0;
+
+	screen_test->overlay = lv_cont_create(lv_layer_top(), NULL);
+	lv_obj_set_style(screen_test->overlay, &overlay_style);
+	lv_obj_set_size(screen_test->overlay, LV_HOR_RES, LV_VER_RES);
+	lv_obj_align(screen_test->overlay, NULL, LV_ALIGN_IN_TOP_LEFT, 0, 0);
+	lv_obj_set_click(screen_test->overlay, true);
+	lv_obj_set_top(screen_test->overlay, true);
+
+	screen_test->img_dsc.header.always_zero = 0;
+	screen_test->img_dsc.header.w = LV_HOR_RES;
+	screen_test->img_dsc.header.h = LV_VER_RES;
+	screen_test->img_dsc.header.cf = LV_IMG_CF_TRUE_COLOR_ALPHA;
+	screen_test->img_dsc.data_size = LV_HOR_RES * LV_VER_RES * sizeof(u32);
+	screen_test->img_dsc.data = (u8 *)screen_test->fb;
+
+	screen_test->img = lv_img_create(screen_test->overlay, NULL);
+	lv_img_set_src(screen_test->img, &screen_test->img_dsc);
+	lv_obj_align(screen_test->img, NULL, LV_ALIGN_CENTER, 0, 0);
+	lv_obj_set_click(screen_test->img, false);
+
+	screen_test->pattern_idx = SCREEN_TEST_PATTERN_WHITE;
+	screen_test->ignore_until_ms = get_tmr_ms() + 350;
+	_screen_test_render_pattern(screen_test);
+
+	screen_test->task = lv_task_create(_screen_test_touch_poll, 30, LV_TASK_PRIO_HIGH, screen_test);
+	lv_task_ready(screen_test->task);
+
+	return LV_RES_OK;
+}
+
+static void _pmic_info_label_update(lv_obj_t *label)
+{
+	bool t210b01 = h_cfg.t210b01;
+	const u32 *pmic_regs;
+	u32 pmic_regs_cnt;
+	_pmic_get_regs(&pmic_regs, &pmic_regs_cnt);
+
+	char *txt_buf = (char *)malloc(SZ_8K);
+	char buck_cfg[32];
+	int ram_uv = max7762x_regulator_get_voltage(REGULATOR_RAM0);
+	s_printf(buck_cfg, "%s", !t210b01 ? "MAX77621 x2" : (ram_uv < 0 ? "MAX77812 Phase31" : "MAX77812 Phase211"));
+
+	s_printf(txt_buf,
+		"#00DDFF PMIC Regulators:#\n"
+		"#FF8000 Main PMIC:#       MAX77620\n"
+		"#FF8000 Buck PMIC:#       %s\n"
+		"#FF8000 Rail          Vset      Cfg    FPS    Act   POK#\n",
+		buck_cfg);
+
+	for (u32 i = 0; i < pmic_regs_cnt; i++)
+	{
+		u32 reg_id = pmic_regs[i];
+		const char *name = max7762x_regulator_get_name(reg_id);
+		int uv = max7762x_regulator_get_voltage(reg_id);
+		int cfg = max7762x_regulator_get_config(reg_id);
+		int fps_src = max7762x_regulator_get_fps_src(reg_id);
+		int enable = max7762x_regulator_get_enable(reg_id);
+		int power_ok = max7762x_regulator_get_power_ok(reg_id);
+		char voltage[16];
+
+		if (uv < 0)
+			strcpy(voltage, "   -   ");
+		else
+			s_printf(voltage, "%4d.%03dV", uv / 1000000, (uv % 1000000) / 1000);
+
+		s_printf(txt_buf + strlen(txt_buf), "%.12s %8s   %s  %s  %s  %s\n",
+			name ? name : "unknown",
+			voltage,
+			_pmic_cfg_state_color(reg_id, cfg),
+			_pmic_fps_state_color(fps_src),
+			_pmic_enable_state_color(enable),
+			_pmic_pok_state_color(power_ok));
+	}
+
+	if (t210b01)
+		strcat(txt_buf, "\n#FFDD00 Note:# SD2 powers LDO0/LDO1/LDO8 and should be enabled on Mariko.\n"
+		               "#FFDD00 Vset# is register-configured voltage, not a measured rail voltage.\n"
+		               "#FFDD00 Cfg# is the direct regulator mode in CNFG.\n"
+		               "#FFDD00 FPS# is the FPS control source; rails can be On even when Cfg is Off if FPS is active.\n"
+		               "#FFDD00 Act# is the derived live state from Cfg or FPS-driven power-good.\n");
+
+	lv_label_set_text(label, txt_buf);
+	free(txt_buf);
+}
+
+static void _pmic_test_btn_update(lv_obj_t *btn)
+{
+	u32 btn_cfg = lv_obj_get_free_num(btn);
+	u32 reg_id = btn_cfg & PMIC_TEST_ID_MASK;
+	bool allow_toggle = btn_cfg & PMIC_TEST_ALLOW_MASK;
+	const char *name = max7762x_regulator_get_name(reg_id);
+	int cfg = max7762x_regulator_get_config(reg_id);
+	int fps_src = max7762x_regulator_get_fps_src(reg_id);
+	int enable = max7762x_regulator_get_enable(reg_id);
+	int power_ok = max7762x_regulator_get_power_ok(reg_id);
+	char label[128];
+
+	s_printf(label, "%s [Cfg:%s FPS:%s Act:%s POK:%s] -> %s",
+		name ? name : "unknown",
+		_pmic_cfg_state(reg_id, cfg),
+		_pmic_fps_state(fps_src),
+		enable < 0 ? "N/A" : (enable ? "On" : "Off"),
+		power_ok < 0 ? "N/A" : (power_ok ? "OK" : "Bad"),
+		allow_toggle ? (enable > 0 ? "Disable" : "Enable") : "Read-only");
+	lv_label_set_text(lv_list_get_btn_label(btn), label);
+}
+
+static lv_res_t _pmic_test_toggle_action(lv_obj_t *btn)
+{
+	u32 btn_cfg = lv_obj_get_free_num(btn);
+	u32 reg_id = btn_cfg & PMIC_TEST_ID_MASK;
+	if (!(btn_cfg & PMIC_TEST_ALLOW_MASK))
+		return LV_RES_OK;
+
+	int enable = max7762x_regulator_get_enable(reg_id);
+	if (enable < 0)
+		return LV_RES_OK;
+
+	max7762x_regulator_enable(reg_id, !enable);
+	_pmic_test_btn_update(btn);
+	if (pmic_info_label)
+		_pmic_info_label_update(pmic_info_label);
+
+	return LV_RES_OK;
+}
+
+static lv_res_t _action_win_pmic_info_close(lv_obj_t *btn)
+{
+	pmic_info_label = NULL;
+
+	return nyx_win_close_action_custom(btn);
+}
+
+static lv_res_t _pmic_refresh_action(lv_obj_t *btn)
+{
+	if (pmic_info_label)
+		_pmic_info_label_update(pmic_info_label);
+
+	return LV_RES_OK;
+}
+
 static lv_res_t _create_window_dump_done(int error, char *dump_filenames)
 {
 	lv_obj_t *dark_bg = lv_obj_create(lv_scr_act(), NULL);
@@ -552,6 +1107,7 @@ static lv_res_t _create_window_hw_info_status(lv_obj_t *btn)
 	lv_obj_t *win = nyx_create_window_custom_close_btn(SYMBOL_CHIP" HW & Fuses Info", _action_win_hw_info_status_close);
 	lv_win_add_btn(win, NULL, SYMBOL_DOWNLOAD" Dump fuses", _fuse_dump_window_action);
 	lv_win_add_btn(win, NULL, SYMBOL_INFO" CAL0 Info", _create_mbox_cal0);
+	lv_win_add_btn(win, NULL, SYMBOL_POWER" PMIC", _create_window_pmic_info_status);
 
 	lv_obj_t *desc = lv_cont_create(win, NULL);
 	lv_obj_set_size(desc, LV_HOR_RES / 2 / 5 * 2, LV_VER_RES - (LV_DPI * 11 / 7) - 5);
@@ -1302,6 +1858,81 @@ static lv_res_t _create_window_hw_info_status(lv_obj_t *btn)
 
 	lv_obj_set_width(lb_desc2, lv_obj_get_width(desc2));
 	lv_obj_align(desc2, val, LV_ALIGN_OUT_RIGHT_MID, LV_DPI / 4, 0);
+
+	return LV_RES_OK;
+}
+
+static lv_res_t _create_window_pmic_info_status(lv_obj_t *btn)
+{
+	lv_obj_t *win = nyx_create_window_custom_close_btn(SYMBOL_POWER" PMIC Rail Info", _action_win_pmic_info_close);
+	lv_win_add_btn(win, NULL, SYMBOL_POWER" Test", _create_window_pmic_test_status);
+	lv_win_add_btn(win, NULL, SYMBOL_REFRESH" Refresh", _pmic_refresh_action);
+
+	lv_obj_t *desc = lv_cont_create(win, NULL);
+	lv_obj_set_size(desc, LV_HOR_RES - LV_DPI * 2, LV_VER_RES - (LV_DPI * 11 / 7) - 5);
+
+	lv_obj_t *lb_desc = lv_label_create(desc, NULL);
+	lv_label_set_long_mode(lb_desc, LV_LABEL_LONG_BREAK);
+	lv_label_set_recolor(lb_desc, true);
+	lv_label_set_style(lb_desc, &monospace_text);
+	pmic_info_label = lb_desc;
+
+	_pmic_info_label_update(lb_desc);
+	lv_obj_set_width(lb_desc, lv_obj_get_width(desc));
+
+	return LV_RES_OK;
+}
+
+static lv_res_t _create_window_pmic_test_status(lv_obj_t *btn)
+{
+	const u32 *pmic_regs;
+	u32 pmic_regs_cnt;
+	u32 content_h = LV_VER_RES - (LV_DPI * 11 / 7) - 5;
+	_pmic_get_regs(&pmic_regs, &pmic_regs_cnt);
+
+	lv_obj_t *win = nyx_create_standard_window(SYMBOL_POWER" PMIC Manual Test");
+
+	lv_obj_t *desc = lv_label_create(win, NULL);
+	lv_label_set_recolor(desc, true);
+	lv_label_set_long_mode(desc, LV_LABEL_LONG_BREAK);
+	lv_obj_set_width(desc, LV_HOR_RES - LV_DPI * 2);
+	lv_label_set_text(desc,
+		"#FFDD00 Warning:# Manual PMIC toggling is for hardware debugging only.\n"
+		"Enabling or disabling some rails may hang the system.\n"
+		"Rails already enabled or controlled by #FFDD00 FPS# when this window opens are read-only.\n"
+		"Only rails that were initially #FF8000 Off# with #FF8000 FPS=None# can be toggled.");
+	lv_obj_align(desc, NULL, LV_ALIGN_IN_TOP_LEFT, LV_DPI / 2, LV_DPI / 4);
+
+	lv_obj_t *list = lv_list_create(win, NULL);
+	lv_obj_set_size(list, LV_HOR_RES - LV_DPI * 2, content_h - lv_obj_get_height(desc) - (LV_DPI * 3 / 4));
+	lv_obj_align(list, desc, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 4);
+	lv_list_set_single_mode(list, true);
+
+	u32 togglable_cnt = 0;
+	for (u32 i = 0; i < pmic_regs_cnt; i++)
+	{
+		u32 reg_id = pmic_regs[i];
+		int cfg = max7762x_regulator_get_config(reg_id);
+		int fps_src = max7762x_regulator_get_fps_src(reg_id);
+		bool allow_toggle = cfg == MAX77620_POWER_MODE_DISABLE && fps_src == MAX77620_FPS_SRC_NONE;
+
+		if (allow_toggle)
+			togglable_cnt++;
+
+		lv_obj_t *list_btn = lv_list_add(list, NULL, "", allow_toggle ? _pmic_test_toggle_action : NULL);
+		lv_obj_set_free_num(list_btn, reg_id | (allow_toggle ? PMIC_TEST_ALLOW_MASK : 0));
+		lv_label_set_recolor(lv_list_get_btn_label(list_btn), true);
+		_pmic_test_btn_update(list_btn);
+
+		if (!allow_toggle)
+			lv_btn_set_state(list_btn, LV_BTN_STATE_INA);
+	}
+
+	if (!togglable_cnt)
+	{
+		lv_obj_t *empty = lv_list_add(list, NULL, "No rails eligible for manual toggling", NULL);
+		lv_btn_set_state(empty, LV_BTN_STATE_INA);
+	}
 
 	return LV_RES_OK;
 }
@@ -3084,11 +3715,18 @@ void create_tab_info(lv_theme_t *th, lv_obj_t *parent)
 	lv_obj_align(btn7, line_sep, LV_ALIGN_OUT_BOTTOM_LEFT, LV_DPI / 4, LV_DPI / 2);
 	lv_btn_set_action(btn7, LV_BTN_ACTION_CLICK, _create_window_battery_status);
 
+	lv_obj_t *btn8 = lv_btn_create(h2, btn7);
+	label_btn = lv_label_create(btn8, NULL);
+	lv_label_set_static_text(label_btn, "Screen Test");
+	lv_obj_align(btn8, btn7, LV_ALIGN_OUT_RIGHT_TOP, LV_DPI * 3 / 4, 0);
+	lv_btn_set_action(btn8, LV_BTN_ACTION_CLICK, _create_window_screen_test);
+
 	lv_obj_t *label_txt6 = lv_label_create(h2, NULL);
 	lv_label_set_recolor(label_txt6, true);
 	lv_label_set_static_text(label_txt6,
 		"View battery and battery charger related info.\n"
-		"Additionally you can dump battery charger's registers.\n");
+		"Additionally you can dump battery charger\'s registers.\n"
+		"You can also launch the #C7EA46 Screen Test# from here.\n");
 	lv_obj_set_style(label_txt6, &hint_small_style);
 	lv_obj_align(label_txt6, btn7, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 3);
 }

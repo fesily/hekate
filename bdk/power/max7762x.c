@@ -145,6 +145,72 @@ static void _max7762x_set_reg(u8 addr, u8 reg, u8 val)
 	}
 }
 
+const char *max7762x_regulator_get_name(u32 id)
+{
+	if (id > REGULATOR_MAX)
+		return NULL;
+
+	return _pmic_regulators[id].name;
+}
+
+int max7762x_regulator_get_config(u32 id)
+{
+	if (id > REGULATOR_MAX)
+		return -1;
+
+	const max77620_regulator_t *reg = &_pmic_regulators[id];
+	u8 addr = _max7762x_get_i2c_address(id);
+	if (!addr)
+		return -1;
+
+	switch (reg->type)
+	{
+	case REGULATOR_SD:
+		return (i2c_recv_byte(I2C_5, addr, reg->cfg_addr) & MAX77620_SD_POWER_MODE_MASK) >> MAX77620_SD_POWER_MODE_SHIFT;
+	case REGULATOR_LDO:
+		return (i2c_recv_byte(I2C_5, addr, reg->volt_addr) & MAX77620_LDO_POWER_MODE_MASK) >> MAX77620_LDO_POWER_MODE_SHIFT;
+	case REGULATOR_BC0:
+		return (i2c_recv_byte(I2C_5, addr, reg->volt_addr) & MAX77621_VOUT_ENABLE_MASK) ? 1 : 0;
+	case REGULATOR_BC1:
+		return (i2c_recv_byte(I2C_5, addr, reg->cfg_addr) & reg->enable.mask) ? 1 : 0;
+	default:
+		return -1;
+	}
+}
+
+int max7762x_regulator_get_fps_src(u32 id)
+{
+	if (id > REGULATOR_LDO8)
+		return -1;
+
+	const max77620_regulator_t *reg = &_pmic_regulators[id];
+
+	return (i2c_recv_byte(I2C_5, MAX77620_I2C_ADDR, reg->fps.fps_addr) & MAX77620_FPS_SRC_MASK) >> MAX77620_FPS_SRC_SHIFT;
+}
+
+int max7762x_regulator_get_enable(u32 id)
+{
+	if (id > REGULATOR_MAX)
+		return -1;
+
+	const max77620_regulator_t *reg = &_pmic_regulators[id];
+	int cfg = max7762x_regulator_get_config(id);
+	if (cfg < 0)
+		return -1;
+
+	if (reg->type != REGULATOR_SD && reg->type != REGULATOR_LDO)
+		return cfg != 0;
+
+	if (cfg != MAX77620_POWER_MODE_DISABLE)
+		return 1;
+
+	int fps_src = max7762x_regulator_get_fps_src(id);
+	if (fps_src < 0 || fps_src == MAX77620_FPS_SRC_NONE)
+		return 0;
+
+	return max77620_regulator_get_status(id) > 0 ? 1 : 0;
+}
+
 int max77620_regulator_get_status(u32 id)
 {
 	if (id > REGULATOR_LDO8)
@@ -161,6 +227,37 @@ int max77620_regulator_get_status(u32 id)
 
 	// LDO power OK status.
 	return (i2c_recv_byte(I2C_5, MAX77620_I2C_ADDR, reg->cfg_addr) & MAX77620_LDO_CFG2_POK_MASK) ? 1 : 0;
+}
+
+int max7762x_regulator_get_power_ok(u32 id)
+{
+	if (id > REGULATOR_LDO8)
+		return -1;
+
+	int cfg = max7762x_regulator_get_config(id);
+	int fps_src = max7762x_regulator_get_fps_src(id);
+	if (cfg < 0 || fps_src < 0)
+		return -1;
+
+	if (cfg == MAX77620_POWER_MODE_DISABLE && fps_src == MAX77620_FPS_SRC_NONE)
+		return -1;
+
+	return max77620_regulator_get_status(id);
+}
+
+int max7762x_regulator_get_voltage(u32 id)
+{
+	if (id > REGULATOR_MAX)
+		return -1;
+
+	const max77620_regulator_t *reg = &_pmic_regulators[id];
+	u8 addr = _max7762x_get_i2c_address(id);
+	if (!addr)
+		return -1;
+
+	u8 val = i2c_recv_byte(I2C_5, addr, reg->volt_addr) & reg->volt_mask;
+
+	return reg->uv_min + val * reg->uv_step;
 }
 
 int max77620_regulator_config_fps(u32 id)

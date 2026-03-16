@@ -921,6 +921,19 @@ lv_obj_t *nyx_create_window_custom_close_btn(const char *win_title, lv_action_t 
 	return win;
 }
 
+bool nyx_get_touch_event(touch_event *event)
+{
+	if (event)
+		memset(event, 0, sizeof(*event));
+
+	if (!touch_enabled || !event)
+		return false;
+
+	*event = touchpad;
+
+	return true;
+}
+
 static bool launch_logs_enable = false;
 
 static void _launch_hos(u8 autoboot, u8 autoboot_list)

@@ -17,6 +17,7 @@
 #ifndef _GUI_H_
 #define _GUI_H_
 
+#include <input/touch.h>
 #include <libs/lvgl/lvgl.h>
 
 typedef struct _emmc_tool_gui_t
@@ -80,6 +81,7 @@ lv_res_t nyx_win_close_action_custom(lv_obj_t * btn);
 void nyx_window_toggle_buttons(lv_obj_t *win, bool disable);
 lv_obj_t *nyx_create_standard_window(const char *win_title);
 lv_obj_t *nyx_create_window_custom_close_btn(const char *win_title, lv_action_t rel_action);
+bool nyx_get_touch_event(touch_event *event);
 void nyx_create_onoff_button(lv_theme_t *th, lv_obj_t *parent, lv_obj_t *btn, const char *btn_name, lv_action_t action, bool transparent);
 lv_res_t nyx_generic_onoff_toggle(lv_obj_t *btn);
 void manual_system_maintenance(bool refresh);
