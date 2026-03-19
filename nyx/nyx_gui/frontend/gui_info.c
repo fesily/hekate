@@ -109,6 +109,17 @@ static void _pmic_get_regs(const u32 **pmic_regs, u32 *pmic_regs_cnt)
 	}
 }
 
+static bool _pmic_test_allow_toggle(u32 reg_id)
+{
+	int enable = max7762x_regulator_get_enable(reg_id);
+	int fps_src = max7762x_regulator_get_fps_src(reg_id);
+
+	if (enable != 0)
+		return false;
+
+	return fps_src < 0 || fps_src == MAX77620_FPS_SRC_NONE;
+}
+
 static char *_pmic_cfg_state(u32 reg_id, int cfg)
 {
 	if (cfg < 0)
@@ -567,6 +578,13 @@ static lv_res_t _pmic_test_toggle_action(lv_obj_t *btn)
 	int enable = max7762x_regulator_get_enable(reg_id);
 	if (enable < 0)
 		return LV_RES_OK;
+
+	if (!enable)
+	{
+		int uv = max7762x_regulator_get_voltage(reg_id);
+		if (uv > 0)
+			max7762x_regulator_set_voltage(reg_id, uv);
+	}
 
 	max7762x_regulator_enable(reg_id, !enable);
 	_pmic_test_btn_update(btn);
@@ -1900,7 +1918,7 @@ static lv_res_t _create_window_pmic_test_status(lv_obj_t *btn)
 		"#FFDD00 Warning:# Manual PMIC toggling is for hardware debugging only.\n"
 		"Enabling or disabling some rails may hang the system.\n"
 		"Rails already enabled or controlled by #FFDD00 FPS# when this window opens are read-only.\n"
-		"Only rails that were initially #FF8000 Off# with #FF8000 FPS=None# can be toggled.");
+		"Only rails that were initially #FF8000 Off# and not controlled by #FF8000 FPS# can be toggled.");
 	lv_obj_align(desc, NULL, LV_ALIGN_IN_TOP_LEFT, LV_DPI / 2, LV_DPI / 4);
 
 	lv_obj_t *list = lv_list_create(win, NULL);
@@ -1912,9 +1930,7 @@ static lv_res_t _create_window_pmic_test_status(lv_obj_t *btn)
 	for (u32 i = 0; i < pmic_regs_cnt; i++)
 	{
 		u32 reg_id = pmic_regs[i];
-		int cfg = max7762x_regulator_get_config(reg_id);
-		int fps_src = max7762x_regulator_get_fps_src(reg_id);
-		bool allow_toggle = cfg == MAX77620_POWER_MODE_DISABLE && fps_src == MAX77620_FPS_SRC_NONE;
+		bool allow_toggle = _pmic_test_allow_toggle(reg_id);
 
 		if (allow_toggle)
 			togglable_cnt++;
