@@ -597,7 +597,7 @@ static lv_res_t _action_win_pmic_info_close(lv_obj_t *btn)
 {
 	pmic_info_label = NULL;
 
-	return nyx_win_close_action_custom(btn);
+	return nyx_win_close_action(btn);
 }
 
 static lv_res_t _pmic_refresh_action(lv_obj_t *btn)
